@@ -185,10 +185,24 @@ exercised in this validation pass — see `docs/VALIDATION.md`.
 `triage_nlp.NoteTriageClassifier` is a secondary, optional module (requires the `nlp`
 extra) that triages an analyst's free-text note into `NOTE_CATEGORIES`
 (`confirmed_threat`/`false_alarm`/`sensor_or_equipment_issue`/`needs_more_information`)
-using a small transformer with a LoRA adapter. **This has not been trained or evaluated
-in this repository** — it requires downloading real pretrained weights and labeled
-training examples, neither of which are part of this repo's automated validation (see
-`docs/VALIDATION.md`). Treat it as a demonstrated *mechanism* (the LoRA fine-tuning
-approach, following the same parameter-efficient-fine-tuning pattern as a general
-LoRA/PEFT reference exercise this project draws on) rather than a measured capability
-until someone runs `triage_nlp.train_note_triage` on real labeled note data.
+using a small transformer with a LoRA adapter.
+
+**Now exercised end to end** (`notebooks/07_note_triage.ipynb`), on a small, hand-written,
+synthetic-but-plausible dataset of 40 analyst notes (10 per category, 8 train / 2 validation
+each, stratified) — not real analyst-labeled data at production volume. LoRA fine-tuning
+`distilbert-base-uncased` (~741K trainable adapter parameters, ~1.1% of the base model) for
+30 epochs on the 32 training notes drove mean training loss from 1.41 to 0.004, and the
+adapter scored **6/8 (0.75) accuracy** on the 8 held-out validation notes it never trained
+on — well above the 4-class no-signal floor of 0.25, on both misses (`livestock wandering`
+mistaken for `confirmed_threat`; an ambiguous long-range note mistaken for
+`sensor_or_equipment_issue` instead of `needs_more_information`) plausibly reflecting genuine
+lexical overlap between categories at this dataset's small size, not an obvious labeling or
+mechanism bug. The trained adapter is saved to `outputs/weights/note_triage_adapter` and
+reloaded through `NoteTriageClassifier` in the same notebook as a round-trip check.
+
+Read this as **the mechanism now demonstrably works, on a toy-scale dataset** — not as a
+validated production accuracy number. 8 validation examples is far too few to bound a real
+error rate, the notes were hand-written by one person rather than sampled from real analyst
+traffic, and the four categories are cleanly separated by construction in a way real notes
+likely won't be. The honest next step for real deployment is real analyst-labeled notes at
+far greater volume, not treating 0.75 on 8 examples as a deployment-grade accuracy claim.

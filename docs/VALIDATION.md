@@ -34,6 +34,7 @@ Python 3.12, CPU-only — no CUDA GPU exercised in this validation pass):
 | `04_edge_deployment_benchmarks.ipynb` | Executed successfully | ONNX export + fp32/int8 CPU latency measured; no CUDA GPU on this validation run |
 | `05_calibration_and_triage.ipynb` | Executed successfully | Isotonic calibration + triage-band routing measured on a freshly trained detector |
 | `06_reporting_and_anomaly_detection.ipynb` | Executed successfully | Report card + dashboard generated from a live pipeline run; HOG-embedding anomaly scorer separated Day (mean 0.36) from Night (mean 0.47) imagery around a calibrated threshold of 0.43 |
+| `07_note_triage.ipynb` | Executed successfully | LoRA fine-tune of `distilbert-base-uncased` on 32 hand-written synthetic analyst notes: training loss 1.41 → 0.004 over 30 epochs, held-out validation accuracy 6/8 (0.75) on 8 notes never seen in training; adapter saved to `outputs/weights/note_triage_adapter` and reloaded via `NoteTriageClassifier` to confirm the round trip reproduces the same predictions |
 
 All numbers above are from a **single run** on one development machine, not an aggregate
 over multiple seeds — see `docs/METHODOLOGY_AND_LIMITATIONS.md` for how to read them
@@ -61,10 +62,12 @@ transparency, and as a heads-up if you re-run that notebook and go looking for i
 - `anomaly.DinoV2Embedder` (the richer, self-supervised embedding backend) is implemented
   but not exercised — only the offline `HOGEmbedder` backend was run, since DINOv2 requires
   a network download on first use.
-- `triage_nlp.py` has **not been trained or run at all** in this repository — it requires
-  downloading real pretrained transformer weights and labeled note data, neither of which
-  are part of this validation pass. Its pure-Python parts (`NOTE_CATEGORIES`,
-  `TriageResult`) are unit-tested; `NoteTriageClassifier`, `train_note_triage`, and the
-  LoRA config helpers are not.
+- `triage_nlp.py` has now been exercised end to end (`notebooks/07_note_triage.ipynb`,
+  see the table above) on a small, hand-written, synthetic-but-plausible labeled dataset (32
+  train / 8 validation notes) — not real analyst-labeled data at production volume. Its
+  pure-Python parts (`NOTE_CATEGORIES`, `TriageResult`) remain covered by fast unit tests
+  that don't require the `nlp` extra; `NoteTriageClassifier`, `train_note_triage`, and the
+  LoRA config helpers are exercised by the notebook rather than by CI (still not installed
+  in CI, since it downloads real pretrained weights on first use — see above).
 - No real overwatch sensor, real facility, or real threat imagery has been used anywhere
   in this project — see `docs/METHODOLOGY_AND_LIMITATIONS.md#limitations`.
