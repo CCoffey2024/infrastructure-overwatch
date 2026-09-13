@@ -87,6 +87,42 @@ fact about "fine-tuning always beats augmentation" or vice versa. Don't treat ei
 ranking as settled — re-run `notebooks/01_domain_gap_evidence.ipynb` and
 `02_real_data_validation.ipynb` and read whatever they currently measure.
 
+## Real-data augmentation: adding VisDrone, and a first `dismount` track
+
+The real-data `vehicle_of_interest` track started with one source (UAVDT). Relying on a
+single real-data source is itself a limitation worth naming: it can't distinguish "this
+detector generalizes" from "this detector fits UAVDT's particular sensors and scenes." This
+project's ingestion layer (`ingest.py`) is deliberately built to combine an arbitrary
+number of independent real sources rather than assume one is enough — see
+`docs/DEVELOPMENT.md#obtaining-visdrone-for-augmenting-uavdt-and-a-real-data-track-for-dismount`.
+VisDrone adds two more, collected differently from UAVDT and from each other (VisDrone-DET:
+unrelated single images; VisDrone-VID: continuous drone flight, structurally like UAVDT).
+
+In this repository's own run (`notebooks/08_visdrone_augmentation.ipynb`, real UAVDT +
+VisDrone2019-DET + VisDrone2019-VID data, 818 combined training frames): concatenating all
+three sources for training raised the UAVDT day/night validation split's F1 from **0.39
+(Day) / 0.08 (Night) with UAVDT alone to 0.44 (Day) / 0.15 (Night) with all three combined**
+— a real improvement in both domains, and proportionally larger on the harder Night split.
+Take this as one run's result, not a settled multiplier: re-run the notebook and read what
+it currently measures.
+
+The second, more exploratory part of that notebook trained the first-ever real-data
+`dismount` detector: VisDrone's `pedestrian`/`people` categories are ground truth UAVDT has
+none of, so `class_scheme="vehicle_dismount"` (see `ingest.class_names_for_scheme`) trains a
+4-class (`car`/`truck`/`bus`/`dismount`) detector on all three sources combined. Evaluated
+**separately** against VisDrone-DET's and VisDrone-VID's own held-out val splits (rather than
+pooling them, specifically so a real difference between the two independently-collected
+sources would be visible rather than averaged away): dismount-only **F1 0.05 on both** —
+precision 0.07/recall 0.04 on DET val, precision 0.06/recall 0.04 on VID val. Agreement
+across the two sources is itself informative (the weak result isn't an artifact of one
+source's peculiarities), but **F1 0.05 is a weak first result, not a usable detector** — a
+genuine capability gap, not a claim that real-data `dismount` detection is solved. Plausible
+next steps before trusting this further: the `VEHICLE_GRID_W`/`VEHICLE_GRID_H` working grid
+was sized for vehicle-scale objects, and a pedestrian is a much smaller fraction of the same
+640x352 canvas (the same "small object" problem `docs/METHODOLOGY_AND_LIMITATIONS.md#limitations`
+already names for the synthetic scene); more training epochs/data, or a dismount-specific
+grid resolution, would be the first things to try, not a re-run at the same settings.
+
 ## Model comparison: lightweight vs. production
 
 The fair comparison depends on whether the production model already knows the classes

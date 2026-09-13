@@ -5,9 +5,10 @@ what it measured — not a claim that everything has been exercised everywhere.
 
 ## Automated checks (CI, and reproducible anywhere)
 
-`ruff check .`, `ruff format --check .`, `mypy src`, and `pytest -v` (65 tests covering
+`ruff check .`, `ruff format --check .`, `mypy src`, and `pytest -v` (80 tests covering
 geometry, grid encode/decode, calibration, tracking, event logic, evaluation, synthetic
-rendering, HOG-based anomaly scoring, and reporting) all pass with no GPU. CI installs the
+rendering, HOG-based anomaly scoring, reporting, and VisDrone-DET/VisDrone-VID
+ingest/class-mapping on on-disk fixtures) all pass with no GPU. CI installs the
 `dev`, `onnx`, `anomaly`, and `dataviz` extras (all lightweight, no model downloads); the
 `yolo` and `nlp` extras are not installed in CI since they pull in either a GPU-oriented
 package or real pretrained weights. These run in CI (`.github/workflows/ci.yml`) on every
@@ -35,6 +36,7 @@ Python 3.12, CPU-only — no CUDA GPU exercised in this validation pass):
 | `05_calibration_and_triage.ipynb` | Executed successfully | Isotonic calibration + triage-band routing measured on a freshly trained detector |
 | `06_reporting_and_anomaly_detection.ipynb` | Executed successfully | Report card + dashboard generated from a live pipeline run; HOG-embedding anomaly scorer separated Day (mean 0.36) from Night (mean 0.47) imagery around a calibrated threshold of 0.43 |
 | `07_note_triage.ipynb` | Executed successfully | LoRA fine-tune of `distilbert-base-uncased` on 32 hand-written synthetic analyst notes: training loss 1.41 → 0.004 over 30 epochs, held-out validation accuracy 6/8 (0.75) on 8 notes never seen in training; adapter saved to `outputs/weights/note_triage_adapter` and reloaded via `NoteTriageClassifier` to confirm the round trip reproduces the same predictions |
+| `08_visdrone_augmentation.ipynb` | Executed successfully (real UAVDT + VisDrone2019-DET + VisDrone2019-VID data) | Combining all three real sources raised `vehicle_of_interest` Day F1 0.39→0.44 and Night F1 0.08→0.15 over UAVDT alone; a first real-data `dismount` detector (4-class, all three sources combined) scored dismount-only F1 0.05 on **both** VisDrone-DET val and VisDrone-VID val independently (precision/recall 0.06-0.07/0.04 on each) — consistent across two independently-collected held-out sources, but a weak first result, not yet a usable detector |
 
 All numbers above are from a **single run** on one development machine, not an aggregate
 over multiple seeds — see `docs/METHODOLOGY_AND_LIMITATIONS.md` for how to read them
@@ -62,12 +64,16 @@ transparency, and as a heads-up if you re-run that notebook and go looking for i
 - `anomaly.DinoV2Embedder` (the richer, self-supervised embedding backend) is implemented
   but not exercised — only the offline `HOGEmbedder` backend was run, since DINOv2 requires
   a network download on first use.
-- `triage_nlp.py` has now been exercised end to end (`notebooks/07_note_triage.ipynb`,
-  see the table above) on a small, hand-written, synthetic-but-plausible labeled dataset (32
-  train / 8 validation notes) — not real analyst-labeled data at production volume. Its
-  pure-Python parts (`NOTE_CATEGORIES`, `TriageResult`) remain covered by fast unit tests
-  that don't require the `nlp` extra; `NoteTriageClassifier`, `train_note_triage`, and the
-  LoRA config helpers are exercised by the notebook rather than by CI (still not installed
-  in CI, since it downloads real pretrained weights on first use — see above).
+- `triage_nlp.py`'s mechanism is now exercised end to end (`notebooks/07_note_triage.ipynb`,
+  see the table above), but only on a 40-example hand-written dataset — real analyst-labeled
+  notes at production volume remain untried.
+- `ingest.py`'s VisDrone-DET/VisDrone-VID support is now exercised end to end
+  (`notebooks/08_visdrone_augmentation.ipynb`, see the table above), but the first
+  real-data `dismount` detector it trained is a weak result (F1 0.05) — a genuine
+  capability gap worth investigating (small-object grid resolution for person-scale boxes,
+  training budget, or loss-term balance tuned for vehicle-scale objects), not yet a claim
+  that real-data `dismount` detection works. The vehicle augmentation result (Day/Night F1
+  improved over UAVDT alone) is a single run on one machine, same caveat as everything else
+  in this section.
 - No real overwatch sensor, real facility, or real threat imagery has been used anywhere
   in this project — see `docs/METHODOLOGY_AND_LIMITATIONS.md#limitations`.
