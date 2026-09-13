@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Environments
+.venv/
+venv/
+.uv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Project data / generated artifacts
+data/*
+!data/.gitkeep
+outputs/*
+!outputs/.gitkeep
+*.pt
+*.onnx
+*.mp4
+*.avi
+yolo_threat_data/
+yolo_threat_runs/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Type/lint caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
