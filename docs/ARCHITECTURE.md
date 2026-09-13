@@ -23,9 +23,14 @@ src/infrastructure_overwatch/
   evaluation.py              precision/recall/F1, incl. attribute-sliced error analysis
   export.py                   ONNX export + fp32/int8, CPU/GPU latency benchmarking
   fusion.py                    optional EO/IR late fusion
-  pipeline.py                   orchestration: wires detector -> tracker -> events ->
-                                calibration into one run
-  cli.py                         `train-synthetic` / `demo` entry points
+  anomaly.py                    embedding-based anomaly scoring (HOG / DINOv2), a
+                                complementary signal to the class-based detectors
+  reporting.py                   Seaborn report-card + Plotly dashboard, built from
+                                PipelineResult's alert/event tables
+  triage_nlp.py                   optional LoRA-fine-tuned free-text alert-note triage
+  pipeline.py                       orchestration: wires detector -> tracker -> events ->
+                                    calibration into one run
+  cli.py                             `train-synthetic` / `demo` / `report` entry points
 ```
 
 ## Data flow
@@ -107,6 +112,34 @@ blind — see `docs/METHODOLOGY_AND_LIMITATIONS.md` for the before/after compari
 justified the current `discard` threshold. This stage is optional in `pipeline.py`
 (`calibrator=None` skips it) because calibration requires its own labeled validation run;
 it cannot bootstrap itself from a single inference pass.
+
+## Secondary capabilities (Phase 2)
+
+Three modules extend the core detect/track/event/calibrate pipeline without being part of
+its critical path — each behind its own optional dependency extra, and each lazy-importing
+its heavy dependencies so the core package has no hard dependency on any of them:
+
+- **`anomaly.py`** (`pip install -e ".[anomaly]"`) — `EmbeddingAnomalyScorer` fits a
+  reference gallery of "normal" imagery embeddings, then flags new imagery by cosine
+  distance to the nearest gallery embedding. Two embedder backends: `HOGEmbedder`
+  (offline, no model download, what CI exercises) and `DinoV2Embedder` (self-supervised
+  DINOv2 features via `torch.hub`, requires network access on first use). This is a
+  complementary signal to the four-class detectors, not a replacement — it has no notion
+  of "drone" or "vehicle," only "unlike anything the gallery has seen," which is useful
+  for genuinely novel visual patterns the fixed taxonomy wouldn't otherwise catch.
+- **`reporting.py`** (`pip install -e ".[dataviz]"`) — `build_report_card` (a static
+  Seaborn figure) and `build_dashboard` (an interactive Plotly dashboard), both built from
+  `pipeline.PipelineResult.alerts_frame()` / `.events_frame()`. Wired into the CLI as
+  `infrastructure-overwatch report`.
+- **`triage_nlp.py`** (`pip install -e ".[nlp]"`) — `NoteTriageClassifier` triages a
+  free-text analyst note (e.g. "confirmed on second camera, escalating") into a small
+  category taxonomy (`NOTE_CATEGORIES`), using a small transformer with a LoRA adapter
+  (parameter-efficient fine-tuning) rather than full fine-tuning. This classifies the
+  analyst's own written assessment, not the visual content of a detection — a separate
+  signal from `types.THREAT_CLASSES`. Like calibration's triage bands, its output is a
+  routing suggestion for a human, never an automated action. Requires downloading real
+  pretrained weights on first use, so it is not exercised in CI (see
+  `docs/VALIDATION.md`).
 
 ## What this system explicitly does not do
 

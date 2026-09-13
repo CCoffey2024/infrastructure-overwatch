@@ -155,6 +155,31 @@ def _cmd_demo(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_report(args: argparse.Namespace) -> int:
+    import pandas as pd
+
+    from .reporting import build_dashboard, build_report_card
+
+    out_dir = Path(args.out_dir)
+    alerts_path = Path(args.alerts)
+    events_path = Path(args.events)
+    if not alerts_path.exists():
+        print(f"No alerts file at {alerts_path}; run `demo` first (or pass --alerts).", file=sys.stderr)
+        return 1
+
+    alerts_df = pd.read_csv(alerts_path)
+    events_df = pd.read_csv(events_path) if events_path.exists() else pd.DataFrame(columns=["severity"])
+
+    report_path = out_dir / "report_card.png"
+    dashboard_path = out_dir / "dashboard.html"
+    build_report_card(alerts_df, events_df, out_path=report_path)
+    build_dashboard(alerts_df, events_df, out_path=dashboard_path)
+
+    print(f"{len(alerts_df)} alerts, {len(events_df)} events summarized")
+    print(f"Wrote {report_path} and {dashboard_path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="infrastructure-overwatch")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -178,6 +203,12 @@ def build_parser() -> argparse.ArgumentParser:
     demo_p.add_argument("--seed", type=int, default=7)
     demo_p.add_argument("--out-dir", default="outputs")
     demo_p.set_defaults(func=_cmd_demo)
+
+    report_p = sub.add_parser("report", help="Build a report card + dashboard from alerts/events CSVs.")
+    report_p.add_argument("--alerts", default="outputs/alerts.csv")
+    report_p.add_argument("--events", default="outputs/events.csv")
+    report_p.add_argument("--out-dir", default="outputs")
+    report_p.set_defaults(func=_cmd_report)
 
     return parser
 

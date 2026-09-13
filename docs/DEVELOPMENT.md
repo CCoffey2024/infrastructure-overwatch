@@ -4,7 +4,8 @@
 
 ```bash
 uv venv
-uv pip install -e ".[dev,onnx]"       # add `yolo` for the Ultralytics backend
+uv pip install -e ".[dev,onnx,anomaly,dataviz]"   # what CI installs
+# add `yolo` for the Ultralytics backend, `nlp` for the LoRA note-triage classifier
 ```
 
 Requires Python 3.12+. Torch/torchvision install from PyPI by default; on a CUDA-capable
@@ -20,10 +21,13 @@ mypy src
 pytest -v
 ```
 
-`pytest`, `ruff`, and `mypy` all run without GPU, without the optional YOLO/UAVDT
-dependencies, and in well under a minute — they cover geometry, grid encode/decode,
-calibration, tracking, event logic, and evaluation, all of which are pure Python/NumPy/
-pandas/scikit-learn with no heavy runtime dependency.
+`pytest`, `ruff`, and `mypy` all run without GPU and without the optional YOLO/UAVDT/NLP
+dependencies, in well under a minute — this covers geometry, grid encode/decode,
+calibration, tracking, event logic, evaluation, HOG-based anomaly scoring, and reporting,
+none of which need a GPU or a model download. `triage_nlp.py`'s tests only cover its
+pure-Python parts (`NOTE_CATEGORIES`, `TriageResult`) for the same reason ONNX/YOLO are
+kept out of the required dependency set — downloading real transformer weights isn't
+something CI should depend on.
 
 ## Training and running the demo
 
@@ -35,7 +39,12 @@ python -m infrastructure_overwatch demo --domain night --calibrate
 `train-synthetic` trains the grid-CNN detector on the synthetic corridor renderer (no
 external data needed) and reports Day/Night validation F1. `demo` generates a synthetic
 moving-threat sequence, runs the full detect → track → event → calibrate pipeline, and
-writes `outputs/alerts.csv` / `outputs/events.csv`.
+writes `outputs/alerts.csv` / `outputs/events.csv`. `report` (requires the `dataviz`
+extra) turns those two CSVs into `outputs/report_card.png` and `outputs/dashboard.html`:
+
+```bash
+python -m infrastructure_overwatch report
+```
 
 ## Obtaining UAVDT (for the real `vehicle_of_interest` track)
 
@@ -72,10 +81,14 @@ plugs into `pipeline.run_frame_sequence` without changing tracking, events, or c
 The notebooks in `notebooks/` are evidence/reproduction notebooks, not the application.
 Each one imports from `infrastructure_overwatch` and runs one specific experiment (the
 domain-gap collapse, the real-UAVDT validation, the model bakeoff, edge-deployment
-benchmarks, calibration) to reproduce the findings written up in
+benchmarks, calibration, and — in `06_reporting_and_anomaly_detection.ipynb` — the
+reporting and anomaly-scoring modules) to reproduce the findings written up in
 `docs/METHODOLOGY_AND_LIMITATIONS.md`. If you change detector, calibration, or tracking
 logic in `src/`, re-run the relevant notebook and update that doc's numbers rather than
-letting the two drift apart.
+letting the two drift apart. They're generated from `scripts/build_notebooks.py` rather
+than hand-edited in Jupyter — edit that script and re-run
+`python scripts/build_notebooks.py <NN>` (a two-digit key, e.g. `06`) to regenerate one
+notebook without touching the others' already-executed outputs.
 
 ## Project origin note
 

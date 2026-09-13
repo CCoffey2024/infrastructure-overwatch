@@ -72,6 +72,24 @@ Read this before trusting a specific alert in a specific condition:
   `METHODOLOGY_AND_LIMITATIONS.md`. Two consecutive alerts with different track IDs are not
   guaranteed to be two different real objects.
 
+## Two additional signals you may see
+
+If your deployment has these optional modules enabled, two more things can show up
+alongside a detection:
+
+- **An anomaly score.** A separate, unlabeled "this looks unlike anything already seen"
+  signal (`anomaly.py`) — it has no notion of `drone`/`dismount`/`launch_flash`/
+  `vehicle_of_interest`, only visual unfamiliarity relative to a reference gallery. Read a
+  high anomaly score as "worth a glance because it's unusual," never as a threat
+  classification in its own right.
+- **A note-triage suggestion.** If you attach a free-text note to an alert, an optional
+  module (`triage_nlp.py`) can suggest one of four categories
+  (`confirmed_threat`/`false_alarm`/`sensor_or_equipment_issue`/
+  `needs_more_information`) based on what you wrote. It is reading your own written
+  assessment back to you as a suggested label, not independently verifying anything — it
+  has not been trained or validated as of this writing (see
+  `METHODOLOGY_AND_LIMITATIONS.md`), so treat any suggestion from it as provisional.
+
 ## If something looks wrong
 
 If you believe this system is missing real threats, raising too many false alerts, or

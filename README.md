@@ -33,6 +33,20 @@ Given a video feed (or a generated synthetic one), the pipeline:
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full module map and the reasoning
 behind the threat taxonomy and the protected-zone event model.
 
+Three secondary capabilities extend that core pipeline, each behind its own optional
+dependency extra:
+
+- **Analyst reporting** (`reporting.py`, `pip install -e ".[dataviz]"`) — a Seaborn
+  report-card figure and a Plotly interactive dashboard, built from the same alert/event
+  tables the pipeline produces (`infrastructure-overwatch report`).
+- **Embedding-based anomaly detection** (`anomaly.py`, `pip install -e ".[anomaly]"`) — a
+  nearest-neighbor embedding distance (HOG by default, or DINOv2) that flags imagery
+  unlike anything in a reference gallery, independent of the four-class taxonomy.
+- **Free-text alert-note triage** (`triage_nlp.py`, `pip install -e ".[nlp]"`) — a small
+  transformer with a LoRA adapter that triages an analyst's free-text note into a
+  category taxonomy (`confirmed_threat` / `false_alarm` / `sensor_or_equipment_issue` /
+  `needs_more_information`).
+
 ## Quickstart
 
 ```bash
@@ -45,6 +59,10 @@ python -m infrastructure_overwatch train-synthetic
 # Run the end-to-end demo: generates a synthetic night-domain sequence, detects, tracks,
 # raises events, and writes outputs/alerts.csv + outputs/events.csv
 python -m infrastructure_overwatch demo --calibrate
+
+# Optional: build a report card + dashboard from that run (needs the `dataviz` extra)
+uv pip install -e ".[dataviz]"
+python -m infrastructure_overwatch report
 ```
 
 Optional real-vehicle-data path (`vehicle_of_interest`, UAVDT-backed) requires a local copy

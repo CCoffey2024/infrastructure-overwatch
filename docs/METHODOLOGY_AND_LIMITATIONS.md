@@ -162,3 +162,33 @@ of fewer missed threats, made explicit and measurable rather than left as an une
 default — see `notebooks/05_calibration_and_triage.ipynb` for the current before/after
 comparison and `calibration.TriageThresholds` to adjust it for a different operating
 environment.
+
+## Embedding-based anomaly detection
+
+`anomaly.EmbeddingAnomalyScorer` is a nearest-neighbor cosine-distance scorer over a
+reference gallery of "normal" imagery embeddings — a complementary signal to the four-class
+detectors, not a replacement (see `docs/ARCHITECTURE.md#secondary-capabilities-phase-2`).
+In this repository's own run (`notebooks/06_reporting_and_anomaly_detection.ipynb`, using
+the offline `HOGEmbedder` backend — no model download involved): a gallery built entirely
+from **Day**-domain corridor renders scored held-out **Day** imagery at a mean anomaly
+distance of **0.36**, and **Night**-domain imagery (a genuinely different visual domain,
+never seen by the gallery) at **0.47** — a clear separation, with a 95th-percentile
+Day-calibrated threshold of **0.43** landing between the two. That is a sanity check that
+the distance metric behaves as intended (a known-different domain scores as more anomalous
+than the reference domain), not a validated real-world anomaly-detection accuracy number;
+no labeled real anomalies have been used to evaluate false-positive/false-negative rates.
+The `DinoV2Embedder` backend (richer, self-supervised features) is implemented but not
+exercised in this validation pass — see `docs/VALIDATION.md`.
+
+## Free-text alert-note triage (optional)
+
+`triage_nlp.NoteTriageClassifier` is a secondary, optional module (requires the `nlp`
+extra) that triages an analyst's free-text note into `NOTE_CATEGORIES`
+(`confirmed_threat`/`false_alarm`/`sensor_or_equipment_issue`/`needs_more_information`)
+using a small transformer with a LoRA adapter. **This has not been trained or evaluated
+in this repository** — it requires downloading real pretrained weights and labeled
+training examples, neither of which are part of this repo's automated validation (see
+`docs/VALIDATION.md`). Treat it as a demonstrated *mechanism* (the LoRA fine-tuning
+approach, following the same parameter-efficient-fine-tuning pattern as a general
+LoRA/PEFT reference exercise this project draws on) rather than a measured capability
+until someone runs `triage_nlp.train_note_triage` on real labeled note data.

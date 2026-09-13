@@ -18,6 +18,9 @@ dependencies = [
 [project.optional-dependencies]
 yolo = ["ultralytics>=8.3"]
 onnx = ["onnx>=1.16", "onnxruntime>=1.18"]
+anomaly = ["scikit-image>=0.22"]
+dataviz = ["matplotlib>=3.8", "seaborn>=0.13", "plotly>=5.20", "kaleido>=0.2"]
+nlp = ["transformers>=4.40", "peft>=0.10", "datasets>=2.19"]
 notebooks = ["jupyter>=1.0", "matplotlib>=3.8"]
 dev = [
     "pytest>=8.0",
