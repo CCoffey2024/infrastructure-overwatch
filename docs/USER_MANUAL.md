@@ -39,9 +39,9 @@ routes each detection into one of three bands:
 - **`auto_confirm`** — high enough calibrated confidence that it's logged as a confirmed
   detection on the dashboard without requiring a first look. **This still means "logged,"
   never "acted on."** A human can still review and dismiss it.
-- **`analyst_review`** — the band where a human's judgment adds the most value over the
-  model's own confidence. This is normally the largest band, and is expected to be — see
-  the measured review-volume numbers in `METHODOLOGY_AND_LIMITATIONS.md`.
+- **`analyst_review`** — the band where a human is most likely to catch what the model's
+  confidence alone would miss. This is normally the largest band, and is expected to be —
+  see the measured review-volume numbers in `METHODOLOGY_AND_LIMITATIONS.md`.
 - **`auto_discard`** — low enough calibrated confidence that it's filtered from the primary
   queue. **Detections in this band are not deleted** — they're retained in the underlying
   data (`Detection.triage_band == "auto_discard"`) so they can be audited if a real event is
@@ -87,14 +87,14 @@ alongside a detection:
   (`confirmed_threat`/`false_alarm`/`sensor_or_equipment_issue`/
   `needs_more_information`) based on what you wrote. It is reading your own written
   assessment back to you as a suggested label, not independently verifying anything — it
-  has not been trained or validated as of this writing (see
-  `METHODOLOGY_AND_LIMITATIONS.md`), so treat any suggestion from it as provisional.
+  was fine-tuned on a small, hand-written set of 40 example notes, not real analyst traffic
+  (see `METHODOLOGY_AND_LIMITATIONS.md`), so treat any suggestion from it as provisional.
 
 ## If something looks wrong
 
 If you believe this system is missing real threats, raising too many false alerts, or
 behaving inconsistently with what this manual describes, treat that as an engineering
-finding to report (see `DEVELOPMENT.md`), not something to silently route around. This
-system's entire value proposition is that its behavior is measured and documented rather
-than assumed — an operator's field observations are exactly the kind of measurement that
-should feed back into it.
+finding to report (see `DEVELOPMENT.md`), not something to silently route around. Trusting
+this system at all depends on its behavior being measured and documented rather than
+assumed — an operator's field observations are exactly the kind of measurement that should
+feed back into it.

@@ -65,7 +65,7 @@ Two independent measurements of the same underlying mechanism:
    synthetic renderer built to make a point. In this repository's own run
    (`notebooks/02_real_data_validation.ipynb`): **F1 0.40 on real Day frames, F1 0.07 on
    real Night frames** with the Day-only-trained model — a smaller absolute gap than the
-   synthetic track, but the same direction, on genuinely independent real footage. Fine-
+   synthetic track, but the same direction, on independently-sourced real footage. Fine-
    tuning on a small batch of real Night-domain frames recovered it to **F1 0.20** (requires
    a local UAVDT copy, see `DEVELOPMENT.md`).
 
@@ -116,7 +116,7 @@ sources would be visible rather than averaged away): dismount-only **F1 0.05 on 
 precision 0.07/recall 0.04 on DET val, precision 0.06/recall 0.04 on VID val. Agreement
 across the two sources is itself informative (the weak result isn't an artifact of one
 source's peculiarities), but **F1 0.05 is a weak first result, not a usable detector** — a
-genuine capability gap, not a claim that real-data `dismount` detection is solved. Plausible
+capability gap, not a claim that real-data `dismount` detection is solved. Plausible
 next steps before trusting this further: the `VEHICLE_GRID_W`/`VEHICLE_GRID_H` working grid
 was sized for vehicle-scale objects, and a pedestrian is a much smaller fraction of the same
 640x352 canvas (the same "small object" problem `docs/METHODOLOGY_AND_LIMITATIONS.md#limitations`
@@ -150,11 +150,10 @@ involved:
   claim until someone runs it (the pieces — `YOLOAdapter`, `UAVDTVehicleDataset` — are both
   already in this codebase and demonstrated separately in `02_real_data_validation.ipynb`).
 
-The actionable takeaway from what *is* measured: **a production model is not a
-strictly-better default you fall back to
-after testing something lighter** — it wins when the class and operating resolution match
-what it was built for, and needs its own investment (resolution, fine-tune budget, or both)
-when they don't.
+The takeaway from what *is* measured: **a production model is not a strictly-better default
+you fall back to after testing something lighter** — it wins when the class and operating
+resolution match what it was built for, and needs its own investment (resolution, fine-tune
+budget, or both) when they don't.
 
 ## Edge deployment
 
@@ -183,8 +182,8 @@ matter for trusting its output:
 
 ## Calibration and analyst review queue
 
-Every detection routes to a human analyst — this system's actual engineering question is
-"how much of the analyst's attention does this consume," not just "what's the accuracy."
+Every detection routes to a human analyst — this system's engineering question is "how much
+of the analyst's attention does this consume," not just "what's the accuracy."
 `calibration.py` fits an isotonic calibration from raw detector confidence to empirical
 true-positive rate on a labeled validation set, then buckets calibrated confidence into
 `auto_confirm` / `analyst_review` / `auto_discard` (see `docs/USER_MANUAL.md` for what each
@@ -207,7 +206,7 @@ detectors, not a replacement (see `docs/ARCHITECTURE.md#secondary-capabilities-p
 In this repository's own run (`notebooks/06_reporting_and_anomaly_detection.ipynb`, using
 the offline `HOGEmbedder` backend — no model download involved): a gallery built entirely
 from **Day**-domain corridor renders scored held-out **Day** imagery at a mean anomaly
-distance of **0.36**, and **Night**-domain imagery (a genuinely different visual domain,
+distance of **0.36**, and **Night**-domain imagery (a different visual domain,
 never seen by the gallery) at **0.47** — a clear separation, with a 95th-percentile
 Day-calibrated threshold of **0.43** landing between the two. That is a sanity check that
 the distance metric behaves as intended (a known-different domain scores as more anomalous
@@ -223,21 +222,22 @@ extra) that triages an analyst's free-text note into `NOTE_CATEGORIES`
 (`confirmed_threat`/`false_alarm`/`sensor_or_equipment_issue`/`needs_more_information`)
 using a small transformer with a LoRA adapter.
 
-**Now exercised end to end** (`notebooks/07_note_triage.ipynb`), on a small, hand-written,
-synthetic-but-plausible dataset of 40 analyst notes (10 per category, 8 train / 2 validation
-each, stratified) — not real analyst-labeled data at production volume. LoRA fine-tuning
+Exercised end to end for the first time in `notebooks/07_note_triage.ipynb`, on a small,
+hand-written, synthetic-but-plausible dataset of 40 analyst notes (10 per category, 8 train
+/ 2 validation each, stratified) — not real analyst-labeled data at production volume. LoRA
+fine-tuning
 `distilbert-base-uncased` (~741K trainable adapter parameters, ~1.1% of the base model) for
 30 epochs on the 32 training notes drove mean training loss from 1.41 to 0.004, and the
 adapter scored **6/8 (0.75) accuracy** on the 8 held-out validation notes it never trained
 on — well above the 4-class no-signal floor of 0.25, on both misses (`livestock wandering`
 mistaken for `confirmed_threat`; an ambiguous long-range note mistaken for
-`sensor_or_equipment_issue` instead of `needs_more_information`) plausibly reflecting genuine
+`sensor_or_equipment_issue` instead of `needs_more_information`) plausibly reflecting real
 lexical overlap between categories at this dataset's small size, not an obvious labeling or
 mechanism bug. The trained adapter is saved to `outputs/weights/note_triage_adapter` and
 reloaded through `NoteTriageClassifier` in the same notebook as a round-trip check.
 
-Read this as **the mechanism now demonstrably works, on a toy-scale dataset** — not as a
-validated production accuracy number. 8 validation examples is far too few to bound a real
+Read this as **the mechanism works, on a toy-scale dataset** — not as a validated
+production accuracy number. 8 validation examples is far too few to bound a real
 error rate, the notes were hand-written by one person rather than sampled from real analyst
 traffic, and the four categories are cleanly separated by construction in a way real notes
 likely won't be. The honest next step for real deployment is real analyst-labeled notes at

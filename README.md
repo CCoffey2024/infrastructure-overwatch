@@ -1,18 +1,18 @@
 # Infrastructure Overwatch
 
-A defensive, analyst-in-the-loop computer-vision pipeline for critical-infrastructure
-corridor monitoring (e.g. a pipeline pumping station and its right-of-way).
+A computer-vision pipeline for critical-infrastructure corridor monitoring (e.g. a pipeline
+pumping station and its right-of-way). It detects, tracks, and routes sensor alerts to a
+human analyst.
 
-> **Scope, stated up front.** This system detects, tracks, and routes alerts about sensor
-> observations to a human analyst. **It contains no targeting, engagement, or fires logic,
-> and nothing here should be extended into one.** Every alert this pipeline produces ends at
-> a person's judgment call, never at an automated action. It is trained on synthetic
-> renderings of a schematic corridor scene plus a curated slice of one public real-drone-video
-> benchmark (UAVDT) — it is **not validated against any real sensor, real threat imagery, or
-> real facility**, and should be read as an engineering prototype, not an operational system.
-> See [docs/METHODOLOGY_AND_LIMITATIONS.md](docs/METHODOLOGY_AND_LIMITATIONS.md) before
-> trusting any output, and [docs/USER_MANUAL.md](docs/USER_MANUAL.md) for what an alert
-> does and does not mean.
+> This system contains no targeting, engagement, or fires logic, and nothing here should be
+> extended into one. Every alert this pipeline produces ends at a person's judgment call,
+> never at an automated action. It is trained on synthetic renderings of a schematic
+> corridor scene plus a curated slice of one public real-drone-video benchmark (UAVDT). It
+> is not validated against any real sensor, real threat imagery, or real facility, and
+> should be treated as an engineering prototype, not an operational system. Read
+> [docs/METHODOLOGY_AND_LIMITATIONS.md](docs/METHODOLOGY_AND_LIMITATIONS.md) before trusting
+> any output, and [docs/USER_MANUAL.md](docs/USER_MANUAL.md) for what an alert does and does
+> not mean.
 
 ## What it does
 
@@ -28,7 +28,7 @@ Given a video feed (or a generated synthetic one), the pipeline:
    (`PipelineEventEngine`).
 4. **Calibrates** detector confidence against measured true-positive rates and routes each
    detection into an `auto_confirm` / `analyst_review` / `auto_discard` triage band, so the
-   analyst's attention — the actual scarce resource — goes where it's warranted.
+   analyst spends time on the detections that actually warrant it.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full module map and the reasoning
 behind the threat taxonomy and the protected-zone event model.
@@ -84,11 +84,10 @@ of the UAVDT benchmark — see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## Project origin
 
-This repository productizes a set of CV/ML engineering exercises originally built as
-narrative research notebooks (`pipeline_defense_scenario.ipynb` and
-`bah_cv_field_deployment.ipynb`). Those notebooks' measured findings and design reasoning
-are preserved in `docs/`; their code has been restructured into a tested, importable
-package rather than kept as one-off notebook cells.
+This repository turns a set of CV/ML engineering exercises, originally built as narrative
+research notebooks (`pipeline_defense_scenario.ipynb` and `bah_cv_field_deployment.ipynb`),
+into a tested, importable package. Those notebooks' measured findings and design reasoning
+are preserved in `docs/`; their code is no longer kept as one-off notebook cells.
 
 ## License
 
