@@ -86,21 +86,67 @@ def build_report_card(alerts_df: pd.DataFrame, events_df: pd.DataFrame, out_path
     return fig
 
 
-def build_dashboard(alerts_df: pd.DataFrame, events_df: pd.DataFrame, out_path: str | Path | None = None):
-    """The same four panels as `build_report_card`, as an interactive Plotly
-    dashboard instead of a static image -- for a live monitoring view rather
-    than a printed briefing."""
+ALERTS_TABLE_COLUMNS = ["frame_id", "label", "confidence", "calibrated_confidence", "triage_band", "track_id"]
+EVENTS_TABLE_COLUMNS = ["frame_id", "timestamp_s", "event_type", "severity", "track_id", "score", "description"]
+
+
+def _add_table(fig, df: pd.DataFrame, columns: list[str], header_color: str, row: int, max_rows: int):
+    """Adds a `go.Table` trace for whichever of `columns` are actually present in `df` --
+    an alerts/events table from a minimal or synthetic-test frame shouldn't raise just
+    because it's missing a column a full pipeline run would always populate."""
+    import plotly.graph_objects as go
+
+    present = [c for c in columns if c in df.columns]
+    if not len(df) or not present:
+        return
+    shown = df[present].head(max_rows)
+    fig.add_trace(
+        go.Table(
+            header=dict(values=present, fill_color=header_color, font=dict(color="white"), align="left"),
+            cells=dict(values=[shown[c] for c in present], align="left"),
+        ),
+        row=row,
+        col=1,
+    )
+
+
+def build_dashboard(
+    alerts_df: pd.DataFrame,
+    events_df: pd.DataFrame,
+    out_path: str | Path | None = None,
+    gif_path: str | Path | None = None,
+    max_table_rows: int = 300,
+):
+    """The same four summary panels as `build_report_card`, as an interactive Plotly
+    dashboard instead of a static image, plus an alerts table and an events table (an
+    operator wants to see the actual rows, not just their distribution) -- for a live
+    monitoring view rather than a printed briefing.
+
+    `gif_path`, if given, is embedded above the charts as an `<img>` element pointing at an
+    already-rendered annotated sequence (see `viz.build_annotated_gif`) -- this function
+    only ever reads `alerts_df`/`events_df`, it never touches pixels itself.
+    """
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
     fig = make_subplots(
-        rows=2,
+        rows=4,
         cols=2,
+        specs=[
+            [{"type": "xy"}, {"type": "xy"}],
+            [{"type": "xy"}, {"type": "xy"}],
+            [{"type": "table", "colspan": 2}, None],
+            [{"type": "table", "colspan": 2}, None],
+        ],
+        row_heights=[0.18, 0.18, 0.32, 0.32],
+        vertical_spacing=0.06,
         subplot_titles=(
             "Detections by threat class",
             "Alert triage bands",
             "Raw detector confidence distribution",
             "Events by severity",
+            "Alerts",
+            "Events",
         ),
     )
 
@@ -125,15 +171,45 @@ def build_dashboard(alerts_df: pd.DataFrame, events_df: pd.DataFrame, out_path: 
         colors = ["#E45756", "#F58518", "#54A24B"]
         fig.add_trace(go.Bar(x=counts.index, y=counts.values, marker_color=colors, name="severity"), row=2, col=2)
 
+    _add_table(fig, alerts_df, ALERTS_TABLE_COLUMNS, "#4C78A8", row=3, max_rows=max_table_rows)
+    _add_table(fig, events_df, EVENTS_TABLE_COLUMNS, "#E45756", row=4, max_rows=max_table_rows)
+
     fig.update_layout(
         title_text="Infrastructure Overwatch — Live Dashboard",
         showlegend=False,
-        height=700,
-        width=900,
+        height=1500,
+        width=1000,
     )
 
     if out_path is not None:
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.write_html(str(out_path))
+        if gif_path is None:
+            fig.write_html(str(out_path))
+        else:
+            _write_dashboard_with_gif(fig, out_path, Path(gif_path))
     return fig
+
+
+def _write_dashboard_with_gif(fig, out_path: Path, gif_path: Path) -> None:
+    """`fig.write_html` produces a full standalone page on its own, so embedding an
+    `<img>` tag alongside it means building the page around `fig.to_html(full_html=False)`
+    instead. The GIF is referenced by a path relative to `out_path`'s own directory, so the
+    dashboard still finds it if both files are moved together."""
+    plot_html = fig.to_html(full_html=False, include_plotlyjs="cdn")
+    try:
+        gif_src = gif_path.relative_to(out_path.parent).as_posix()
+    except ValueError:
+        gif_src = gif_path.as_posix()
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Infrastructure Overwatch Dashboard</title></head>
+<body style="font-family: sans-serif; margin: 24px;">
+<h1>Infrastructure Overwatch — Live Dashboard</h1>
+<h2>Annotated sequence</h2>
+<img src="{gif_src}" alt="Annotated sequence" style="max-width: 100%; background: #000;">
+{plot_html}
+</body>
+</html>"""
+    out_path.write_text(html, encoding="utf-8")

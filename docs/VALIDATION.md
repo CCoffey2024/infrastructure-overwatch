@@ -5,14 +5,14 @@ what it measured — not a claim that everything has been exercised everywhere.
 
 ## Automated checks (CI, and reproducible anywhere)
 
-`ruff check .`, `ruff format --check .`, `mypy src`, and `pytest -v` (80 tests covering
+`ruff check .`, `ruff format --check .`, `mypy src`, and `pytest -v` (92 tests covering
 geometry, grid encode/decode, calibration, tracking, event logic, evaluation, synthetic
-rendering, HOG-based anomaly scoring, reporting, and VisDrone-DET/VisDrone-VID
-ingest/class-mapping on on-disk fixtures) all pass with no GPU. CI installs the
-`dev`, `onnx`, `anomaly`, and `dataviz` extras (all lightweight, no model downloads); the
-`yolo` and `nlp` extras are not installed in CI since they pull in either a GPU-oriented
-package or real pretrained weights. These run in CI (`.github/workflows/ci.yml`) on every
-push/PR.
+rendering, HOG-based anomaly scoring, reporting, VisDrone-DET/VisDrone-VID
+ingest/class-mapping on on-disk fixtures, and detection-drawing/GIF rendering) all pass
+with no GPU. CI installs the `dev`, `onnx`, `anomaly`, and `dataviz` extras (all
+lightweight, no model downloads); the `yolo` and `nlp` extras are not installed in CI since
+they pull in either a GPU-oriented package or real pretrained weights. These run in CI
+(`.github/workflows/ci.yml`) on every push/PR.
 
 ## End-to-end pipeline
 
@@ -21,6 +21,16 @@ push/PR.
 `python -m infrastructure_overwatch report` were all run on this machine and completed
 without error, producing `outputs/weights/corridor_detector.pt`, `outputs/alerts.csv`,
 `outputs/events.csv`, `outputs/report_card.png`, and `outputs/dashboard.html`.
+
+The dashboard's annotated-GIF panel (`viz.build_annotated_gif`) was checked past "the file
+exists" — loaded in a real browser, played, and its pixels read back programmatically
+against the exact detection coordinates in that run's `alerts.csv`. That check caught a
+real bug before it shipped: the first implementation wrote an actual compressed video
+(WebM/VP8 via `cv2.VideoWriter`), which played, but its lossy inter-frame compression
+visibly destroyed a detection box that was only drawn on a single frame — real
+`(160, 160, 160)` gray came back near-black. Switching to an animated GIF (no inter-frame
+prediction to lose a one-frame box to) fixed it; `tests/test_viz.py` now has a regression
+test for exactly this case.
 
 ## Evidence notebooks
 

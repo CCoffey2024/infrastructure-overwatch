@@ -25,8 +25,10 @@ src/infrastructure_overwatch/
   fusion.py                    optional EO/IR late fusion
   anomaly.py                    embedding-based anomaly scoring (HOG / DINOv2), a
                                 complementary signal to the class-based detectors
-  reporting.py                   Seaborn report-card + Plotly dashboard, built from
-                                PipelineResult's alert/event tables
+  reporting.py                   Seaborn report-card + Plotly dashboard (charts and
+                                alerts/events tables), built from PipelineResult's tables
+  viz.py                          draws detections on frames and renders an annotated GIF
+                                of a run -- what the dashboard's video panel shows
   triage_nlp.py                   optional LoRA-fine-tuned free-text alert-note triage
   pipeline.py                       orchestration: wires detector -> tracker -> events ->
                                     calibration into one run
@@ -127,9 +129,13 @@ its heavy dependencies so the core package has no hard dependency on any of them
   of "drone" or "vehicle," only "unlike anything the gallery has seen," which is useful
   for novel visual patterns the fixed taxonomy wouldn't otherwise catch.
 - **`reporting.py`** (`pip install -e ".[dataviz]"`) — `build_report_card` (a static
-  Seaborn figure) and `build_dashboard` (an interactive Plotly dashboard), both built from
+  Seaborn figure) and `build_dashboard` (an interactive Plotly dashboard: the same four
+  summary charts, plus an alerts table and an events table, plus — if `demo --video` wrote
+  one — an embedded annotated GIF of the run), both built from
   `pipeline.PipelineResult.alerts_frame()` / `.events_frame()`. Wired into the CLI as
-  `infrastructure-overwatch report`.
+  `infrastructure-overwatch report`. The GIF itself comes from `viz.py`, which only needs
+  the base dependencies (OpenCV, Pillow) — no `dataviz` extra — since drawing boxes on
+  frames doesn't touch matplotlib/seaborn/plotly at all.
 - **`triage_nlp.py`** (`pip install -e ".[nlp]"`) — `NoteTriageClassifier` triages a
   free-text analyst note (e.g. "confirmed on second camera, escalating") into a small
   category taxonomy (`NOTE_CATEGORIES`), using a small transformer with a LoRA adapter

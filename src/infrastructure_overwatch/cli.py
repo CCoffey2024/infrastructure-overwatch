@@ -121,9 +121,11 @@ def _cmd_demo(args: argparse.Namespace) -> int:
 
     rng = np.random.default_rng(args.seed)
     sequence = render_corridor_sequence(args.n_frames, rng, domain=args.domain, n_threats=args.n_threats)
+    rgb_frames = [img for img, _boxes, _ids in sequence]
     frames = [
         np.transpose(img, (2, 0, 1)).mean(axis=0, keepdims=True).astype("float32") for img, _boxes, _ids in sequence
     ]
+    frame_ids = [f"F{i:06d}" for i in range(len(frames))]
 
     calibrator = None
     if args.calibrate:
@@ -133,6 +135,7 @@ def _cmd_demo(args: argparse.Namespace) -> int:
         frames=frames,
         detector=adapter,
         protected_zone=PROTECTED_ZONE,
+        frame_ids=frame_ids,
         fps=args.fps,
         tracker=MultiTracker(),
         event_engine=PipelineEventEngine(protected_zone=PROTECTED_ZONE),
@@ -152,6 +155,16 @@ def _cmd_demo(args: argparse.Namespace) -> int:
     for e in result.events:
         print(f"  [{e.severity:6s}] {e.event_type:16s} t={e.timestamp_s:6.2f}s  {e.description}")
     print(f"Wrote {alerts_path} and {events_path}")
+
+    if args.video:
+        from .viz import build_annotated_gif
+
+        video_path = out_dir / "annotated_demo.gif"
+        build_annotated_gif(
+            rgb_frames, frame_ids, result.detections, video_path, fps=args.fps, protected_zone=PROTECTED_ZONE
+        )
+        print(f"Wrote {video_path}")
+
     return 0
 
 
@@ -170,10 +183,15 @@ def _cmd_report(args: argparse.Namespace) -> int:
     alerts_df = pd.read_csv(alerts_path)
     events_df = pd.read_csv(events_path) if events_path.exists() else pd.DataFrame(columns=["severity"])
 
+    video_path = Path(args.video) if args.video else None
+    if video_path is not None and not video_path.exists():
+        print(f"No annotated GIF at {video_path}; dashboard will skip that panel.", file=sys.stderr)
+        video_path = None
+
     report_path = out_dir / "report_card.png"
     dashboard_path = out_dir / "dashboard.html"
     build_report_card(alerts_df, events_df, out_path=report_path)
-    build_dashboard(alerts_df, events_df, out_path=dashboard_path)
+    build_dashboard(alerts_df, events_df, out_path=dashboard_path, gif_path=video_path)
 
     print(f"{len(alerts_df)} alerts, {len(events_df)} events summarized")
     print(f"Wrote {report_path} and {dashboard_path}")
@@ -202,12 +220,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     demo_p.add_argument("--seed", type=int, default=7)
     demo_p.add_argument("--out-dir", default="outputs")
+    demo_p.add_argument(
+        "--video",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Write an annotated GIF of the sequence (boxes, labels, confidence) to "
+        "<out-dir>/annotated_demo.gif. See viz.py for why this is a GIF, not a compressed video.",
+    )
     demo_p.set_defaults(func=_cmd_demo)
 
     report_p = sub.add_parser("report", help="Build a report card + dashboard from alerts/events CSVs.")
     report_p.add_argument("--alerts", default="outputs/alerts.csv")
     report_p.add_argument("--events", default="outputs/events.csv")
     report_p.add_argument("--out-dir", default="outputs")
+    report_p.add_argument(
+        "--video",
+        default="outputs/annotated_demo.gif",
+        help="Annotated GIF to embed in the dashboard, if it exists (produced by `demo`). "
+        "Pass an empty string to skip embedding one.",
+    )
     report_p.set_defaults(func=_cmd_report)
 
     return parser

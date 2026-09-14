@@ -37,8 +37,9 @@ Three secondary capabilities extend that core pipeline, each behind its own opti
 dependency extra:
 
 - **Analyst reporting** (`reporting.py`, `pip install -e ".[dataviz]"`) — a Seaborn
-  report-card figure and a Plotly interactive dashboard, built from the same alert/event
-  tables the pipeline produces (`infrastructure-overwatch report`).
+  report-card figure and a Plotly interactive dashboard (summary charts, plus alerts and
+  events tables, plus an embedded annotated GIF of the run — see `viz.py`), built from the
+  same alert/event tables the pipeline produces (`infrastructure-overwatch report`).
 - **Embedding-based anomaly detection** (`anomaly.py`, `pip install -e ".[anomaly]"`) — a
   nearest-neighbor embedding distance (HOG by default, or DINOv2) that flags imagery
   unlike anything in a reference gallery, independent of the four-class taxonomy.
@@ -57,10 +58,12 @@ uv pip install -e ".[dev,onnx]"
 python -m infrastructure_overwatch train-synthetic
 
 # Run the end-to-end demo: generates a synthetic night-domain sequence, detects, tracks,
-# raises events, and writes outputs/alerts.csv + outputs/events.csv
+# raises events, and writes outputs/alerts.csv + outputs/events.csv + an annotated GIF
+# (outputs/annotated_demo.gif — boxes, labels, confidence; pass --no-video to skip it)
 python -m infrastructure_overwatch demo --calibrate
 
-# Optional: build a report card + dashboard from that run (needs the `dataviz` extra)
+# Optional: build a report card + dashboard from that run (needs the `dataviz` extra) --
+# the dashboard embeds the annotated GIF above its charts and alerts/events tables
 uv pip install -e ".[dataviz]"
 python -m infrastructure_overwatch report
 ```
