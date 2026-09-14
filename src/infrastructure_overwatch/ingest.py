@@ -230,8 +230,9 @@ class UAVDTVehicleDataset(Dataset):
     domain-randomization remedy in docs/METHODOLOGY_AND_LIMITATIONS.md.
     `class_scheme` defaults to `"vehicle_only"` (this dataset's native 3
     categories); pass `"vehicle_dismount"` only to match the class-index
-    space of a `VisDroneVehicleDataset` it's being concatenated with -- UAVDT
-    itself never has a dismount box to contribute."""
+    space of a `VisDroneDETVehicleDataset`/`VisDroneVIDVehicleDataset` it's
+    being concatenated with -- UAVDT itself never has a dismount box to
+    contribute."""
 
     index: UAVDTIndex
     seq_list: list[str]

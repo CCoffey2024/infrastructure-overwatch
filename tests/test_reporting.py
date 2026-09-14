@@ -66,3 +66,28 @@ def test_dashboard_handles_missing_triage_band_column():
     alerts_no_band = pd.DataFrame([{"label": "drone", "confidence": 0.5}])
     fig = build_dashboard(alerts_no_band, _events_df())
     assert fig is not None
+
+
+def test_dashboard_includes_alerts_and_events_tables():
+    fig = build_dashboard(_alerts_df(), _events_df())
+    table_traces = [t for t in fig.data if t.type == "table"]
+    assert len(table_traces) == 2
+
+
+def test_dashboard_tables_handle_missing_columns_without_raising():
+    minimal_alerts = pd.DataFrame([{"label": "drone", "confidence": 0.5}])
+    minimal_events = pd.DataFrame([{"severity": "high"}])
+    fig = build_dashboard(minimal_alerts, minimal_events)
+    assert fig is not None
+
+
+def test_dashboard_with_gif_path_embeds_an_img_tag(tmp_path: Path):
+    out_path = tmp_path / "dashboard.html"
+    gif_path = tmp_path / "annotated_demo.gif"
+    gif_path.write_bytes(b"not a real gif, just needs to exist for the relative-path check")
+
+    build_dashboard(_alerts_df(), _events_df(), out_path=out_path, gif_path=gif_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "<img" in html
+    assert "annotated_demo.gif" in html
