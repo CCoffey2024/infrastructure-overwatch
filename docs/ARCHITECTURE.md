@@ -64,19 +64,18 @@ A fixed or patrol EO sensor watching a pipeline corridor realistically catches a
 set of *visual signatures*, not every threat a planner might list:
 
 - **`drone`** — a small UAS/loitering munition. Modeled as a small, compact airborne
-  shape: genuinely hard to see at range, which is the point of most of the domain-gap work
+  shape: hard to see at range, which is the point of most of the domain-gap work
   in `docs/METHODOLOGY_AND_LIMITATIONS.md`.
 - **`dismount`** — an unauthorized person near the fence line or manifold. A narrow,
   upright silhouette; the one class `events.PipelineEventEngine` treats specially for
   loitering (`PERSON_LOITER`), since a stationary vehicle and a loitering person warrant
   different analyst framing.
 - **`launch_flash`** — a launch signature (flash + rising smoke), standing in for
-  rocket/indirect-fire/stand-off threats. **This is a deliberate scope-down**: a
-  pipeline-perimeter camera cannot realistically track a rocket or missile in flight — it's
-  too fast, too far, and off-axis for most of its flight. What a fixed camera *can* catch is
-  the launch signature itself. Modeling "detect the missile" would model a sensor capability
-  that doesn't exist at this range; modeling "detect the launch flash" models what the
-  sensor actually sees.
+  rocket/indirect-fire/stand-off threats. A pipeline-perimeter camera cannot realistically
+  track a rocket or missile in flight — it's too fast, too far, and off-axis for most of its
+  flight. What a fixed camera *can* catch is the launch signature itself. Modeling "detect
+  the missile" would model a sensor capability that doesn't exist at this range; modeling
+  "detect the launch flash" models what the sensor actually sees.
 - **`vehicle_of_interest`** — an unauthorized or "technical"-type vehicle approaching the
   corridor. The one class with a real-data-backed track (`ingest.UAVDTIndex` /
   `UAVDTVehicleDataset`, from the UAVDT drone-video benchmark) instead of a synthetic
@@ -126,7 +125,7 @@ its heavy dependencies so the core package has no hard dependency on any of them
   DINOv2 features via `torch.hub`, requires network access on first use). This is a
   complementary signal to the four-class detectors, not a replacement — it has no notion
   of "drone" or "vehicle," only "unlike anything the gallery has seen," which is useful
-  for genuinely novel visual patterns the fixed taxonomy wouldn't otherwise catch.
+  for novel visual patterns the fixed taxonomy wouldn't otherwise catch.
 - **`reporting.py`** (`pip install -e ".[dataviz]"`) — `build_report_card` (a static
   Seaborn figure) and `build_dashboard` (an interactive Plotly dashboard), both built from
   `pipeline.PipelineResult.alerts_frame()` / `.events_frame()`. Wired into the CLI as

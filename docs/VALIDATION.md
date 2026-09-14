@@ -69,8 +69,8 @@ transparency, and as a heads-up if you re-run that notebook and go looking for i
   notes at production volume remain untried.
 - `ingest.py`'s VisDrone-DET/VisDrone-VID support is now exercised end to end
   (`notebooks/08_visdrone_augmentation.ipynb`, see the table above), but the first
-  real-data `dismount` detector it trained is a weak result (F1 0.05) — a genuine
-  capability gap worth investigating (small-object grid resolution for person-scale boxes,
+  real-data `dismount` detector it trained is a weak result (F1 0.05) — a capability gap
+  worth investigating (small-object grid resolution for person-scale boxes,
   training budget, or loss-term balance tuned for vehicle-scale objects), not yet a claim
   that real-data `dismount` detection works. The vehicle augmentation result (Day/Night F1
   improved over UAVDT alone) is a single run on one machine, same caveat as everything else
