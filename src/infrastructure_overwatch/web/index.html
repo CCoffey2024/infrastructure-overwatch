@@ -25,10 +25,10 @@
             <option value="visdrone-vid">VisDrone2019-VID sequence</option>
           </select>
         </label>
-        <label>Path / sequence
-          <input type="text" name="path" placeholder="C:\clips\corridor.mp4 or M0601" required />
+        <label><span id="path-label-text">Video file path</span>
+          <input type="text" name="path" id="path-input" placeholder="C:\clips\corridor.mp4" required />
         </label>
-        <p class="hint">Read in place, not uploaded/copied -- point at any local video file, image folder, or named benchmark sequence.</p>
+        <p class="hint" id="path-hint">Read in place, not uploaded/copied -- point at a local video file.</p>
         <label id="split-row" class="hidden">VisDrone split
           <select name="split">
             <option value="val">val</option>
