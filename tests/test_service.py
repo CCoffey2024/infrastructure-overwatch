@@ -137,6 +137,21 @@ def test_frame_endpoint_returns_a_jpeg(client):
     assert resp.content[:2] == b"\xff\xd8"  # JPEG magic bytes
 
 
+def test_frame_ids_lets_a_client_map_frame_index_onto_alerts_frame_id(client):
+    resp = client.post("/api/jobs", json={"source": f"video:{client.video_path}", "conf_thresh": 0.01, "stride": 1})
+    job_id = resp.json()["job_id"]
+    _wait_for_status(client, job_id)
+
+    frame_ids = client.get(f"/api/jobs/{job_id}/frame_ids").json()
+    alerts = client.get(f"/api/jobs/{job_id}/alerts").json()
+
+    assert len(frame_ids) == 8  # matches the fixture's frame count
+    # every alert's frame_id must be one this job's own frame_ids list actually produced --
+    # the player's overlay join (frame index -> frame_id -> alerts for that frame) depends
+    # on this holding, not on frame_ids and alerts.csv happening to agree by coincidence
+    assert {a["frame_id"] for a in alerts} <= set(frame_ids)
+
+
 def test_frame_endpoint_404_out_of_range(client):
     resp = client.post("/api/jobs", json={"source": f"video:{client.video_path}", "conf_thresh": 0.01, "stride": 1})
     job_id = resp.json()["job_id"]
