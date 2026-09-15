@@ -9,22 +9,31 @@ src/infrastructure_overwatch/
   grid_codec.py        encode/decode between (box, class) ground truth and the grid-tensor
                        label format the project's own detector predicts
   synthetic.py          the day/night corridor scene renderer (drone/dismount/launch_flash)
-  ingest.py              video -> FrameRecord ingestion; real UAVDT vehicle-data reader
+  ingest.py              real-data ingestion: named-benchmark readers (UAVDT, VisDrone-DET,
+                         VisDrone-VID, with ground truth) plus load_video_frames/
+                         load_image_folder_frames (an arbitrary local video file or image
+                         folder, no ground truth, works on anything)
   detectors/
     classical.py          background-subtraction motion detector (no model, no classes)
     grid_cnn.py             this project's own lightweight detector: model, training,
                            evaluation, and a DetectorAdapter wrapper
     yolo_adapter.py          Ultralytics YOLO backend, same adapter interface
     ground_truth.py           replays known annotations, for testing tracking/events
-  tracking.py             MultiTracker: greedy IoU + constant-velocity data association
+  tracking.py             MultiTracker: greedy IoU + constant-velocity data association,
+                         plus a min_hits confirm-gate before a track can raise events
   events.py                PipelineEventEngine: protected-zone entry/stopped/loiter alerts
   calibration.py            isotonic confidence calibration + auto_confirm/review/discard
-                           triage routing
-  evaluation.py              precision/recall/F1, incl. attribute-sliced error analysis
+                           triage routing; self_calibrate() (shared by cli.py and runs.py)
+  evaluation.py              precision/recall/F1 + attribute-sliced error analysis, plus
+                             COCO-style average_precision/mean_average_precision,
+                            precision_recall_curve, and calibration_reliability
   export.py                   ONNX export + fp32/int8, CPU/GPU latency benchmarking
-  fusion.py                    optional EO/IR late fusion
-  anomaly.py                    embedding-based anomaly scoring (HOG / DINOv2), a
-                                complementary signal to the class-based detectors
+  fusion.py                    late_fuse_detections (2-sensor, box-level, pre-registered
+                               imagery) and fuse_events (N-sensor, semantic-event-level,
+                              across independently-run sensor jobs -- see below)
+  anomaly.py                    embedding-based anomaly scoring (HOG / DINOv2) plus
+                                score_track_anomalies, which turns scored track crops
+                               into VISUAL_ANOMALY pipeline events
   reporting.py                   Seaborn report-card + Plotly dashboard (charts and
                                 alerts/events tables), built from PipelineResult's tables
   viz.py                          draws detections on frames and renders an annotated
@@ -33,9 +42,21 @@ src/infrastructure_overwatch/
                                 docstring for why the format depends on the frame source
   triage_nlp.py                   optional LoRA-fine-tuned free-text alert-note triage
   pipeline.py                       orchestration: wires detector -> tracker -> events ->
-                                    calibration into one run
+                                    calibration into one run (run_frame_sequence)
+  runs.py                            RealRunConfig/run_real_pipeline: turns a --source
+                                     spec into a PipelineResult, shared verbatim by cli.py
+                                    and service.py so neither can drift from the other
+  jobs.py                              JobStore: one JSON file per job, no database --
+                                      the operator console's run/fusion job records
+  service.py                            OperatorService + the FastAPI app: submit a run
+                                       or fusion job, poll status, read back evidence
+                                      (alerts/events/metrics/frames) -- see
+                                     docs/OPERATOR_CONSOLE.md
+  web/                                   the operator-console frontend (index.html/
+                                        app.js/style.css, vanilla JS, no build step)
   cli.py                             `train-synthetic` / `demo` / `train-real` /
-                                    `demo-real` / `report` entry points
+                                    `demo-real` / `fit-anomaly-reference` / `report` /
+                                   `serve` entry points
 ```
 
 ## Data flow
@@ -130,7 +151,15 @@ its heavy dependencies so the core package has no hard dependency on any of them
   DINOv2 features via `torch.hub`, requires network access on first use). This is a
   complementary signal to the four-class detectors, not a replacement — it has no notion
   of "drone" or "vehicle," only "unlike anything the gallery has seen," which is useful
-  for novel visual patterns the fixed taxonomy wouldn't otherwise catch.
+  for novel visual patterns the fixed taxonomy wouldn't otherwise catch. `EmbeddingAnomaly
+  Scorer.save`/`.load` persist a fitted gallery (`fit-anomaly-reference` builds one from a
+  folder of normal imagery, holding half out for threshold calibration — scoring an image
+  against a gallery that already contains it would find itself as a perfect match and
+  silently calibrate an unusably strict near-zero threshold). `score_track_anomalies`
+  crops each sufficiently mature track, scores it against a loaded gallery, and emits a
+  `VISUAL_ANOMALY` `Event` the first time a track crosses the threshold — reusing the
+  existing `Event` type and the same fire-once-per-track discipline
+  `PipelineEventEngine` already uses, wired into `demo`/`demo-real` via `--anomaly-ref`.
 - **`reporting.py`** (`pip install -e ".[dataviz]"`) — `build_report_card` (a static
   Seaborn figure) and `build_dashboard` (an interactive Plotly dashboard: the same four
   summary charts, plus an alerts table and an events table, plus — if `demo`/`demo-real
@@ -148,6 +177,57 @@ its heavy dependencies so the core package has no hard dependency on any of them
   routing suggestion for a human, never an automated action. Requires downloading real
   pretrained weights on first use, so it is not exercised in CI (see
   `docs/VALIDATION.md`).
+
+## The operator console (Phase 3)
+
+`cli.py`'s `demo`/`demo-real` commands and the web operator console (`service.py` + `web/`)
+are two front ends over the same engine, not two implementations of it — the same
+discipline as "one adapter interface for every detector" above, extended to the ingest/
+serving boundary:
+
+```
+--source spec
+     │
+     ▼
+runs.load_real_source() -> frames, labels (or None), rgb_frames
+     │
+     ▼
+runs.run_real_pipeline() -> PipelineResult   (same detect/track/event/calibrate/anomaly
+     │                                        stack cli.py's demo-real always ran)
+     ├── cli.py: writes alerts.csv/events.csv, prints a summary, optionally an annotated
+     │           video (boxes burned into pixels -- a static, shareable export)
+     │
+     └── service.py: writes alerts.csv/events.csv/frame_ids.json under a JobStore-tracked
+                      job directory; the web console's player draws boxes *client-side*,
+                      live, from the raw frame (GET .../frame/{n}, re-derived from the
+                      original source, never burned in) + the alerts table -- which is
+                      what makes a confidence-threshold slider, per-class visibility
+                      toggles, and click-a-box-to-highlight-its-track possible at all. A
+                      pre-rendered video can't support any of that no matter which codec
+                      survives the browser (see docs/VALIDATION.md's own GIF/WebM color-
+                      fidelity findings for why boxes get burned into pixels for the
+                      *static* export in the first place, and why the interactive path
+                      deliberately avoids doing that at all).
+```
+
+`jobs.JobStore` persists one JSON file per job (no database) under the workspace's `jobs/`
+directory, with crash recovery (a job left `queued`/`running` from a killed process is
+reclassified `failed` on the next load — that process is gone). `Job.config` records the
+exact `RealRunConfig` a run was submitted with, so a later `/metrics` or `/frame/{n}` read
+can reconstruct an identical config instead of guessing at `stride`/`cap`/`class_scheme`.
+
+`fusion.fuse_events` operates one level above `late_fuse_detections`: it fuses *events*
+already produced by independently completed sensor jobs (time window + event type,
+optionally label and/or pixel-space IoU), not raw boxes from two live, pre-registered
+streams — see the module's own docstring and `docs/OPERATOR_CONSOLE.md` for the full
+contract. `events.csv` carries neither label nor box, so `load_sensor_event_evidence`
+joins each event back to its own run's `alerts.csv` on `(frame_id, track_id)` to recover
+them before fusion can use them for label/spatial matching.
+
+The console has no authentication and binds to loopback (`127.0.0.1`) by default —
+`docs/OPERATOR_CONSOLE.md` covers the full security posture and why every job-submission
+route reading a local filesystem path directly makes that the correct default, not just a
+cautious one.
 
 ## What this system explicitly does not do
 

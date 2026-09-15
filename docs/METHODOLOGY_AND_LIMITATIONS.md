@@ -180,6 +180,20 @@ matter for trusting its output:
   as "don't treat two alerts with different track IDs as guaranteed-different real objects"
   (see `docs/USER_MANUAL.md`), not as a bug to eliminate entirely with this associator.
 
+A real, measured consequence of this associator's simplicity: running `demo-real` against
+a dense real VisDrone intersection sequence (`uav0000140_01590_v`, ~130 sampled frames)
+with the default `--track-min-hits 1` produced **1,707 events** — almost all `ZONE_ENTRY`,
+almost all from tracks that were seen once, never re-associated, and then coasted out. The
+event count is not measuring 1,707 real objects entering a zone; it's measuring how often
+this associator loses a detection and spawns a fresh track id for what's very likely the
+same real vehicle. `MultiTracker.min_hits` gates event-eligibility on a track surviving a
+configurable number of real hits first (coasted frames don't count); re-running the
+identical sequence with `--track-min-hits 3` produced **856 events**, roughly half. This
+does not make the associator Hungarian-optimal or fix the underlying ID-switch rate above
+— it only stops single-hit noise from each independently raising its own event, which is a
+real robustness improvement for the event/alert layer specifically, not a tracking-accuracy
+claim. See `docs/VALIDATION.md` for how this was measured.
+
 ## Calibration and analyst review queue
 
 Every detection routes to a human analyst — this system's engineering question is "how much

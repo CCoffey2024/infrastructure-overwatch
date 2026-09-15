@@ -33,20 +33,30 @@ Given a video feed (or a generated synthetic one), the pipeline:
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full module map and the reasoning
 behind the threat taxonomy and the protected-zone event model.
 
-Three secondary capabilities extend that core pipeline, each behind its own optional
-dependency extra:
+Several capabilities extend that core pipeline, each behind its own optional dependency
+extra:
 
 - **Analyst reporting** (`reporting.py`, `pip install -e ".[dataviz]"`) — a Seaborn
   report-card figure and a Plotly interactive dashboard (summary charts, plus alerts and
   events tables, plus an embedded annotated GIF of the run — see `viz.py`), built from the
-  same alert/event tables the pipeline produces (`infrastructure-overwatch report`).
+  same alert/event tables the pipeline produces (`infrastructure-overwatch report`). A
+  static, shareable snapshot of one run.
 - **Embedding-based anomaly detection** (`anomaly.py`, `pip install -e ".[anomaly]"`) — a
   nearest-neighbor embedding distance (HOG by default, or DINOv2) that flags imagery
   unlike anything in a reference gallery, independent of the four-class taxonomy.
+  `fit-anomaly-reference` builds a gallery from a folder of normal imagery;
+  `demo`/`demo-real --anomaly-ref <path>` scores tracks against it and raises
+  `VISUAL_ANOMALY` events the same way any other event fires.
 - **Free-text alert-note triage** (`triage_nlp.py`, `pip install -e ".[nlp]"`) — a small
   transformer with a LoRA adapter that triages an analyst's free-text note into a
   category taxonomy (`confirmed_threat` / `false_alarm` / `sensor_or_equipment_issue` /
   `needs_more_information`).
+- **The operator console** (`service.py` + `web/`, `pip install -e ".[web]"`) — a local
+  web UI (`infrastructure-overwatch serve`): submit a run from a form instead of the CLI,
+  watch a job queue, and review evidence in an interactive video player (confidence
+  slider, per-class filters, click-a-box-to-highlight-its-track) instead of opening CSVs.
+  Also fuses events from multiple completed sensor runs. See
+  [docs/OPERATOR_CONSOLE.md](docs/OPERATOR_CONSOLE.md).
 
 ## Quickstart
 
@@ -69,12 +79,25 @@ python -m infrastructure_overwatch report
 ```
 
 There is a second, parallel `train-real` / `demo-real` pair of commands that run the same
-pipeline against real UAVDT/VisDrone footage instead of the synthetic renderer, for the
-`vehicle_of_interest` (and, with `--class-scheme vehicle_dismount`, `dismount`) track —
-requires a local copy of one or both datasets, see
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). `demo-real` writes a WebM video rather than a
-GIF (real footage has far more colors than a GIF palette can hold faithfully — see
-`viz.py`); pass `report --video outputs/annotated_demo.webm` to embed it.
+pipeline against real footage instead of the synthetic renderer, for the
+`vehicle_of_interest` (and, with `--class-scheme vehicle_dismount`, `dismount`) track.
+`demo-real --source` accepts a named benchmark sequence with ground truth
+(`uavdt:M0601`, `visdrone-vid:uav0000086_00000_v` — `--calibrate` and mAP/F1 scoring
+apply, see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for obtaining either dataset) or an
+arbitrary local video file or image folder (`video:C:\clips\corridor.mp4`,
+`folder:C:\clips\frames` — no ground truth, but works on any footage, not just the two
+named benchmarks). `demo-real` writes a WebM video rather than a GIF (real footage has far
+more colors than a GIF palette can hold faithfully — see `viz.py`); pass `report --video
+outputs/annotated_demo.webm` to embed it.
+
+Or skip the CLI entirely and drive the same pipeline from a browser:
+
+```bash
+uv pip install -e ".[web]"
+python -m infrastructure_overwatch serve
+```
+
+See [docs/OPERATOR_CONSOLE.md](docs/OPERATOR_CONSOLE.md).
 
 ## Documentation
 
@@ -87,6 +110,8 @@ GIF (real footage has far more colors than a GIF palette can hold faithfully —
   calibration) and a model-card-style limitations statement
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — engineer setup, tests, extending the
   pipeline with a new detector backend
+- [docs/OPERATOR_CONSOLE.md](docs/OPERATOR_CONSOLE.md) — the web UI/API: starting it, what
+  it does, and its security posture (loopback-only by default, and why)
 - [docs/VALIDATION.md](docs/VALIDATION.md) — an honest record of what has actually been
   run and measured on this codebase, and what hasn't
 

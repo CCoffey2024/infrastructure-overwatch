@@ -5,14 +5,19 @@ what it measured — not a claim that everything has been exercised everywhere.
 
 ## Automated checks (CI, and reproducible anywhere)
 
-`ruff check .`, `ruff format --check .`, `mypy src`, and `pytest -v` (97 tests covering
-geometry, grid encode/decode, calibration, tracking, event logic, evaluation, synthetic
-rendering, HOG-based anomaly scoring, reporting, VisDrone-DET/VisDrone-VID
-ingest/class-mapping on on-disk fixtures, and detection-drawing/GIF/video rendering) all
-pass with no GPU. CI installs the `dev`, `onnx`, `anomaly`, and `dataviz` extras (all
-lightweight, no model downloads); the `yolo` and `nlp` extras are not installed in CI since
-they pull in either a GPU-oriented package or real pretrained weights. These run in CI
-(`.github/workflows/ci.yml`) on every push/PR.
+`ruff check .`, `ruff format --check .`, `mypy src`, and `pytest -v` (177 tests covering
+geometry, grid encode/decode, calibration, tracking (including the `MultiTracker.min_hits`
+confirm-gate), event logic, evaluation (framewise P/R/F1 and COCO-style mAP/PR-curve/
+calibration-reliability), synthetic rendering, HOG-based anomaly scoring plus the
+`score_track_anomalies` pipeline wiring, reporting, VisDrone-DET/VisDrone-VID
+ingest/class-mapping on on-disk fixtures, generic video/image-folder ingestion,
+detection-drawing/GIF/video rendering, N-sensor semantic event fusion, the JSON-file job
+store, the FastAPI operator-console service end to end via `TestClient`, and the `serve`
+CLI command's loopback-only refusal gate) all pass with no GPU. CI installs the `dev`,
+`onnx`, `anomaly`, `dataviz`, and `web` extras (all lightweight, no model downloads); the
+`yolo` and `nlp` extras are not installed in CI since they pull in either a GPU-oriented
+package or real pretrained weights. These run in CI (`.github/workflows/ci.yml`) on every
+push/PR.
 
 ## End-to-end pipeline
 
@@ -54,6 +59,72 @@ panel caught two more real bugs before they shipped:
   many consecutive frames), so VP8's sparse-content failure mode doesn't apply here. Both
   bugs have regression tests in `tests/test_viz.py`.
 
+## CV engine hardening and the operator console
+
+A later pass hardened the pipeline itself (generic ingestion, tracker robustness, real
+accuracy metrics, anomaly wiring) and built a local web operator console on top of it —
+job store, FastAPI service, N-sensor fusion, and an interactive analyst frontend. All of
+it was run against real footage on this machine, not just unit-tested:
+
+- **Generic ingestion**: `demo-real --source "video:...\test_subset_55frames_30fps.mp4"`
+  and `--source "folder:...\uav0000140_01590_v"` (a real VisDrone2019-VID sequence's raw
+  frame folder, read as a plain image folder rather than through the named `visdrone-vid:`
+  reader) both ran end to end and produced detections/tracks/events identical in kind to
+  the named-dataset path — confirms `load_video_frames`/`load_image_folder_frames` aren't
+  just unit-tested in isolation.
+- **Tracker confirm-gate**: `demo-real --source "visdrone-vid:uav0000140_01590_v"
+  --split train --calibrate` against a dense real intersection sequence produced 1,707
+  events from 128 frames with the (unchanged) default `--track-min-hits 1` — almost
+  entirely `ZONE_ENTRY` events from single-hit, never-re-associated tracks, not real zone
+  entries. Re-running the identical sequence with `--track-min-hits 3` produced 856
+  events, roughly half. `MultiTracker.min_hits`/`is_confirmed()` measurably fixes what it
+  was built to fix, on the sequence that originally surfaced the problem, not a
+  synthetic reproduction of it (a synthetic reproduction also exists, deterministically,
+  in `tests/test_pipeline.py`).
+- **mAP/calibration-reliability against real detector output**: `evaluation.
+  mean_average_precision`/`calibration_reliability` were run against a real trained
+  detector's predictions on real UAVDT footage (`M0601`, not just hand-built fixtures)
+  and produced plausible, low-but-nonzero numbers consistent with this project's
+  already-documented weak real-data accuracy (see "Real-data augmentation" below) — mAP
+  wasn't just correct on a toy example, it was sanity-checked against a model whose
+  accuracy ceiling was already independently measured elsewhere in this document.
+- **Anomaly wiring**: `fit-anomaly-reference` (HOG embedder, a 4-image gallery split
+  2/2 for gallery/calibration) followed by `demo-real --anomaly-ref ...` produced
+  `VISUAL_ANOMALY` events end to end, deduplicated once per track as designed. The
+  gallery used for this smoke test was small and drawn from a different scene than the
+  footage it scored, so the resulting anomaly rate was high — a calibration-data-quality
+  artifact of the smoke test, not a defect in `score_track_anomalies` itself.
+- **The operator console, live, in a real browser**: started `serve`, then — through the
+  actual HTML form, not curl — submitted a real run against
+  `visdrone-vid:uav0000140_01590_v`, watched it move through `queued`/`running`/
+  `completed` in the polling job-queue table, opened the evidence panel, played the
+  annotated sequence (canvas overlay drawn from `/frame/{n}` + the alerts table, boxes/
+  labels/confidence/track-id rendered correctly), filtered by confidence threshold and by
+  class, clicked a box and confirmed its track highlighted, read real mAP/calibration
+  numbers off the Metrics tab, then ran a second job under a different `sensor_id` and
+  fused the two through the fusion panel, confirming the fused-event and contributor
+  tables. This caught one real bug before it shipped: `GET /api/jobs/{id}/metrics` was
+  silently shadowed by a more general `GET /api/jobs/{id}/{table_name}` route registered
+  before it (FastAPI/Starlette match routes in registration order), so every metrics
+  request was being rejected as "no such table" — invisible to `pytest` because the only
+  automated `/metrics` test used a source with no ground truth, which is a 404 either
+  way. Fixed by reordering the routes; a regression test now stubs `read_metrics` and
+  asserts the real handler runs, and the fix was re-verified live against the same real
+  run afterward.
+- A second, narrower bug surfaced by the *test suite* rather than manual testing: adding
+  `test_service.py` made `tests/test_reporting.py::test_report_card_writes_file` fail
+  intermittently with `_tkinter.TclError` when the full suite ran together (never in
+  isolation). `reporting.build_report_card` never called `matplotlib.use(...)`, so it
+  silently depended on whatever GUI backend matplotlib auto-selected in the calling
+  process; something in the FastAPI/Starlette/anyio `TestClient` machinery left Tk in a
+  state the next `matplotlib.pyplot` import couldn't recover from. Fixed by forcing the
+  `Agg` backend explicitly in `build_report_card` — it only ever writes a PNG file, it
+  never needed a GUI backend in the first place. Confirmed stable across three
+  consecutive full-suite runs afterward.
+
+All of the above is a single pass on one development machine, same caveat as everything
+else in this document.
+
 ## Evidence notebooks
 
 Executed top-to-bottom (`jupyter nbconvert --execute`) on this development machine (Windows,
@@ -91,8 +162,13 @@ transparency, and as a heads-up if you re-run that notebook and go looking for i
 - No CUDA GPU was exercised during this validation pass (edge-deployment GPU latency
   numbers are machine-dependent; re-run `04_edge_deployment_benchmarks.ipynb` on a CUDA
   machine to get them).
-- The classical motion detector (`detectors/classical.py`) and EO/IR fusion
-  (`fusion.py`) are covered by unit tests but not exercised in an evidence notebook.
+- The classical motion detector (`detectors/classical.py`) is covered by unit tests but
+  not exercised in an evidence notebook. `fusion.py`'s box-level `late_fuse_detections`
+  and its N-sensor semantic `fuse_events` are both now covered by `tests/test_fusion.py`
+  (added from scratch — this file previously claimed unit-test coverage for `fusion.py`
+  that didn't actually exist; there were zero tests for it before), and `fuse_events` is
+  additionally exercised end to end through the live operator-console walkthrough below.
+  Neither has an evidence notebook.
 - `anomaly.DinoV2Embedder` (the richer, self-supervised embedding backend) is implemented
   but not exercised — only the offline `HOGEmbedder` backend was run, since DINOv2 requires
   a network download on first use.
@@ -109,3 +185,14 @@ transparency, and as a heads-up if you re-run that notebook and go looking for i
   in this section.
 - No real overwatch sensor, real facility, or real threat imagery has been used anywhere
   in this project — see `docs/METHODOLOGY_AND_LIMITATIONS.md#limitations`.
+- The operator console has no file-upload path — every job-submission route reads a
+  local filesystem path directly (see `docs/OPERATOR_CONSOLE.md`). `score_track_
+  anomalies`'s live smoke test above only exercised the `HOGEmbedder` backend through the
+  console, matching the existing `DinoV2Embedder` gap already noted above.
+- `evaluation.slice_metrics` (attribute-sliced P/R/F1) has no consumer anywhere in
+  `service.py`/the web console yet — the same gap this document already notes for
+  `mean_average_precision`/`calibration_reliability` before they were wired into
+  `/api/jobs/{id}/metrics`, just not yet closed for slicing.
+- `fusion.fuse_events`'s live smoke test above fused two runs built from the *same*
+  underlying footage under different `sensor_id`s, as a mechanism check — it has not been
+  run against genuinely independent EO/IR sensor feeds of the same scene.
