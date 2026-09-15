@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Infrastructure Overwatch — Operator Console</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<header class="topbar">
+  <h1>Infrastructure Overwatch <span class="subtitle">Operator Console</span></h1>
+  <p class="security-note">Bound to loopback unless started with --allow-remote. No authentication -- see docs/OPERATOR_CONSOLE.md.</p>
+</header>
+
+<main class="layout">
+  <aside class="sidebar">
+    <section class="panel">
+      <h2>Start analysis run</h2>
+      <form id="ingest-form">
+        <label>Source kind
+          <select name="kind" id="source-kind">
+            <option value="video">Video file</option>
+            <option value="folder">Image folder</option>
+            <option value="uavdt">UAVDT sequence</option>
+            <option value="visdrone-vid">VisDrone2019-VID sequence</option>
+          </select>
+        </label>
+        <label>Path / sequence
+          <input type="text" name="path" placeholder="C:\clips\corridor.mp4 or M0601" required />
+        </label>
+        <p class="hint">Read in place, not uploaded/copied -- point at any local video file, image folder, or named benchmark sequence.</p>
+        <label id="split-row" class="hidden">VisDrone split
+          <select name="split">
+            <option value="val">val</option>
+            <option value="train">train</option>
+            <option value="test-dev">test-dev</option>
+          </select>
+        </label>
+        <label>Sensor ID
+          <input type="text" name="sensor_id" value="EO_1" required />
+        </label>
+        <label>Class scheme
+          <select name="class_scheme">
+            <option value="vehicle_only">vehicle_only</option>
+            <option value="vehicle_dismount">vehicle_dismount</option>
+          </select>
+        </label>
+        <div class="row">
+          <label>Stride <input type="number" name="stride" value="2" min="1" /></label>
+          <label>Cap <input type="number" name="cap" value="150" min="1" /></label>
+        </div>
+        <div class="row">
+          <label>FPS <input type="number" name="fps" value="10" min="1" step="0.5" /></label>
+          <label>Conf. threshold <input type="number" name="conf_thresh" value="0.4" min="0" max="1" step="0.05" /></label>
+        </div>
+        <label>Track min-hits
+          <input type="number" name="track_min_hits" value="1" min="1" />
+        </label>
+        <label class="checkbox"><input type="checkbox" name="calibrate" /> Self-calibrate (named sequences only)</label>
+        <label>Anomaly reference (optional path)
+          <input type="text" name="anomaly_ref" placeholder="outputs/weights/anomaly_reference.npz" />
+        </label>
+        <button type="submit">Start analysis</button>
+        <p id="ingest-error" class="error hidden"></p>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>Fuse completed runs</h2>
+      <p class="hint">Select at least two completed runs with distinct sensor IDs.</p>
+      <div id="fusion-run-list" class="run-list"></div>
+      <label>Max time delta (s) <input type="number" id="fusion-max-delta" value="0.5" min="0" step="0.1" /></label>
+      <label class="checkbox"><input type="checkbox" id="fusion-require-label" /> Require matching label</label>
+      <button id="fuse-button" disabled>Fuse selected runs</button>
+      <p id="fusion-error" class="error hidden"></p>
+    </section>
+  </aside>
+
+  <section class="main-column">
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Job queue</h2>
+        <button id="refresh-button">Refresh</button>
+      </div>
+      <table class="job-table">
+        <thead>
+          <tr><th>Status</th><th>Kind</th><th>Source / fusion</th><th>Sensor</th><th>Created</th><th>Result</th></tr>
+        </thead>
+        <tbody id="job-table-body"></tbody>
+      </table>
+    </section>
+
+    <section class="panel" id="evidence-panel">
+      <h2>Evidence</h2>
+      <p id="evidence-empty" class="hint">Select a job from the queue above.</p>
+      <div id="evidence-content" class="hidden">
+        <div class="summary-tiles" id="summary-tiles"></div>
+
+        <div id="player-block">
+          <h3>Annotated sequence</h3>
+          <div class="player">
+            <canvas id="player-canvas"></canvas>
+          </div>
+          <div class="player-controls">
+            <button id="play-button">Play</button>
+            <button id="prev-frame">◀</button>
+            <input type="range" id="frame-slider" min="0" max="0" value="0" />
+            <button id="next-frame">▶</button>
+            <span id="frame-counter">0 / 0</span>
+            <label>Speed
+              <select id="speed-select">
+                <option value="0.25">0.25×</option>
+                <option value="0.5">0.5×</option>
+                <option value="1" selected>1×</option>
+                <option value="2">2×</option>
+              </select>
+            </label>
+            <label class="checkbox"><input type="checkbox" id="loop-checkbox" /> Loop</label>
+          </div>
+          <div class="player-filters">
+            <label>Confidence ≥ <span id="conf-threshold-value">0.00</span>
+              <input type="range" id="conf-threshold" min="0" max="1" step="0.01" value="0" />
+            </label>
+            <div id="class-toggles" class="class-toggles"></div>
+            <button id="clear-highlight" class="hidden">Clear highlighted track</button>
+          </div>
+        </div>
+
+        <nav class="tabs" id="evidence-tabs">
+          <button data-tab="detections" class="tab-active">Detections</button>
+          <button data-tab="events">Events</button>
+          <button data-tab="alerts">Alerts</button>
+          <button data-tab="anomalies">Anomalies</button>
+          <button data-tab="metrics">Metrics</button>
+          <button data-tab="fusion">Fusion evidence</button>
+        </nav>
+        <div id="tab-content"></div>
+      </div>
+    </section>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

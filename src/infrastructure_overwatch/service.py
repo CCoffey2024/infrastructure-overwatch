@@ -13,6 +13,7 @@ must choose, understanding what that means for their network. See docs/OPERATOR_
 from __future__ import annotations
 
 import io
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -81,6 +82,10 @@ class OperatorService:
             out_dir.mkdir(parents=True, exist_ok=True)
             output.result.alerts_frame().to_csv(out_dir / "alerts.csv", index=False)
             output.result.events_frame().to_csv(out_dir / "events.csv", index=False)
+            # alerts.csv/events.csv only carry each row's string frame_id; the interactive
+            # player addresses frames positionally (GET .../frame/{n}), so it needs this
+            # ordered list to look up which alerts/events belong to frame n.
+            (out_dir / "frame_ids.json").write_text(json.dumps(output.frame_ids))
 
             summary = {
                 "frames": len(output.frame_ids),
@@ -196,6 +201,17 @@ class OperatorService:
             "calibration_reliability": reliability_df.to_dict("records"),
         }
 
+    def read_frame_ids(self, job_id: str) -> list[str]:
+        """The ordered list of string `frame_id`s a run job actually produced -- lets a
+        client map the positional frame index `/frame/{n}` addresses onto the `frame_id`
+        alerts.csv/events.csv rows carry, e.g. to look up which alerts belong to frame
+        `n` for an overlay."""
+        job = self._require_completed(job_id)
+        path = Path(job.output_dir) / "frame_ids.json"
+        if not path.exists():
+            return []
+        return json.loads(path.read_text())
+
     def read_frame_jpeg(self, job_id: str, frame_index: int, quality: int = 90) -> bytes:
         """Re-derives one RAW frame (no boxes burned in -- an interactive viewer draws
         those itself from `read_table(..., "alerts")`) from the job's original source,
@@ -233,14 +249,24 @@ class OperatorService:
             shutil.rmtree(out_dir, ignore_errors=True)
 
 
+WEB_DIR = Path(__file__).parent / "web"
+
+
 def create_app(service: OperatorService | None = None):
     """Builds the FastAPI app. Imports fastapi lazily -- the `web` extra is optional,
     so nothing outside `serve`/this module should have a hard dependency on it."""
     from fastapi import FastAPI, HTTPException
-    from fastapi.responses import Response
+    from fastapi.responses import FileResponse, Response
+    from fastapi.staticfiles import StaticFiles
 
     service = service or OperatorService(workspace_dir="outputs")
     app = FastAPI(title="Infrastructure Overwatch Operator Console")
+
+    @app.get("/")
+    def index() -> FileResponse:
+        return FileResponse(WEB_DIR / "index.html")
+
+    app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
     @app.get("/api/health")
     def health() -> dict:
@@ -322,6 +348,13 @@ def create_app(service: OperatorService | None = None):
         except (KeyError, ValueError, IndexError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return Response(content=jpeg_bytes, media_type="image/jpeg")
+
+    @app.get("/api/jobs/{job_id}/frame_ids")
+    def read_frame_ids(job_id: str) -> list[str]:
+        try:
+            return service.read_frame_ids(job_id)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/api/jobs/{job_id}/{table_name}")
     def read_table(job_id: str, table_name: str, offset: int = 0, limit: int = 200) -> list[dict]:
