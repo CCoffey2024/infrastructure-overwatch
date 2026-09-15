@@ -81,13 +81,27 @@ def test_dashboard_tables_handle_missing_columns_without_raising():
     assert fig is not None
 
 
-def test_dashboard_with_gif_path_embeds_an_img_tag(tmp_path: Path):
+def test_dashboard_with_gif_media_path_embeds_an_img_tag(tmp_path: Path):
     out_path = tmp_path / "dashboard.html"
-    gif_path = tmp_path / "annotated_demo.gif"
-    gif_path.write_bytes(b"not a real gif, just needs to exist for the relative-path check")
+    media_path = tmp_path / "annotated_demo.gif"
+    media_path.write_bytes(b"not a real gif, just needs to exist for the relative-path check")
 
-    build_dashboard(_alerts_df(), _events_df(), out_path=out_path, gif_path=gif_path)
+    build_dashboard(_alerts_df(), _events_df(), out_path=out_path, media_path=media_path)
 
     html = out_path.read_text(encoding="utf-8")
     assert "<img" in html
+    assert "<video" not in html
     assert "annotated_demo.gif" in html
+
+
+def test_dashboard_with_webm_media_path_embeds_a_video_tag(tmp_path: Path):
+    out_path = tmp_path / "dashboard.html"
+    media_path = tmp_path / "annotated_demo.webm"
+    media_path.write_bytes(b"not a real webm, just needs to exist for the relative-path check")
+
+    build_dashboard(_alerts_df(), _events_df(), out_path=out_path, media_path=media_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "<video" in html
+    assert "<img" not in html
+    assert "annotated_demo.webm" in html

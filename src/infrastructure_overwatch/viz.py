@@ -1,20 +1,32 @@
-"""Draws detections onto frames and renders an annotated GIF of a pipeline run --
+"""Draws detections onto frames and renders an annotated GIF or video of a pipeline run --
 what an operator actually looks at, as opposed to `reporting.py`'s summary
 charts/tables. Uses OpenCV and Pillow only (both already hard dependencies
 across this project), so this module needs no optional extra.
 
-GIF, not a compressed video: an actual video codec turned out to be a bad fit for a
-demo/audit tool. The PyPI `opencv-python` wheel doesn't bundle an H.264 encoder (patent
-licensing), so `cv2.VideoWriter` with `mp4v`/`avc1` silently produces a file most browsers
-can't decode -- `writer.isOpened()` even reports success; the failure only shows up later
-as a browser decode error. Falling back to VP8/WebM (which every major browser does play)
-traded that problem for a worse one: measured directly against this project's own sparse
-detections, VP8's lossy inter-frame compression visibly washed out a detection box that
-was only drawn on a single frame, down from its real (160, 160, 160) gray to near-black --
-exactly the kind of thing an operator needs to see correctly. A GIF has no inter-frame
-prediction to lose a one-frame box to, and every major browser renders it natively via a
-plain `<img>` tag, no codec install required on any machine this runs on. The tradeoffs:
-no scrub bar/play-pause controls, and a larger file for a long, high-resolution sequence.
+Two output formats, because one format turned out to be wrong for one of this project's
+two frame sources, and measuring why is worth keeping:
+
+- `build_annotated_gif` -- for the synthetic renderer (`demo`). A GIF has no inter-frame
+  prediction, so a detection box that only appears on a single frame can't get silently
+  lost to lossy compression the way `cv2.VideoWriter`'s `mp4v`/`avc1` (unplayable in most
+  browsers -- the PyPI `opencv-python` wheel has no H.264 *encoder*, patent licensing, not
+  a bug here) or VP8/WebM (playable, but its lossy inter-frame compression washed out a
+  synthetic-scene box drawn on only one frame, measured down from real `(160, 160, 160)`
+  gray to near-black) both can. The synthetic renderer's flat, low-color-count scenes fit
+  comfortably inside GIF's 256-color palette, so nothing is lost there either.
+- `build_annotated_video` -- for real UAVDT/VisDrone footage (`demo-real`). GIF is the
+  wrong tool here: a single real 640x352 frame with boxes drawn on it measured out to
+  105,825 distinct colors, nowhere close to fitting a 256-color palette -- the same
+  detection box that renders as an exact `(76, 175, 80)` green came back a muddy
+  `(111, 129, 112)` after a GIF round-trip, indistinguishable from the background at a
+  glance. VP8/WebM, built for exactly this kind of photographic content, preserved that
+  same box to `(74, 174, 79)` -- real UAVDT/VisDrone detections are also denser (tracked
+  objects usually span many consecutive frames, not one), so the sparse-content failure
+  mode that ruled VP8 out for the synthetic path doesn't apply here.
+
+Pick the one that matches your frame source; there's no single format that's right for
+both, and defaulting to either one for the other case has already produced a shipped bug
+once (`docs/VALIDATION.md` has both).
 """
 
 from __future__ import annotations
@@ -89,6 +101,31 @@ def draw_detections(
     return img
 
 
+def _render_frames(
+    frames_rgb: list[np.ndarray],
+    frame_ids: list[str],
+    detections: list[Detection],
+    protected_zone: tuple[float, float, float, float] | None,
+    scale: int,
+) -> list[np.ndarray]:
+    """Shared by both output formats: `draw_detections` on every frame, after grouping
+    `detections` by `frame_id`. Common validation lives here too, so both public functions
+    fail the same way on the same bad input."""
+    if not frames_rgb:
+        raise ValueError("requires at least one frame")
+    if len(frames_rgb) != len(frame_ids):
+        raise ValueError(f"frames_rgb ({len(frames_rgb)}) and frame_ids ({len(frame_ids)}) must be the same length")
+
+    by_frame: dict[str, list[Detection]] = {}
+    for d in detections:
+        by_frame.setdefault(d.frame_id, []).append(d)
+
+    return [
+        draw_detections(f, by_frame.get(fid, []), protected_zone, scale)
+        for f, fid in zip(frames_rgb, frame_ids, strict=True)
+    ]
+
+
 def build_annotated_gif(
     frames_rgb: list[np.ndarray],
     frame_ids: list[str],
@@ -101,24 +138,14 @@ def build_annotated_gif(
     """Writes an animated GIF with every frame's detections drawn on it -- groups
     `detections` by `frame_id` internally, so callers just pass the flat list
     `PipelineResult.detections` already produces, alongside the same
-    `frames_rgb`/`frame_ids` given to `pipeline.run_frame_sequence`. See the module
-    docstring for why this is a GIF and not a compressed video."""
-    if not frames_rgb:
-        raise ValueError("build_annotated_gif requires at least one frame")
-    if len(frames_rgb) != len(frame_ids):
-        raise ValueError(f"frames_rgb ({len(frames_rgb)}) and frame_ids ({len(frame_ids)}) must be the same length")
-
-    by_frame: dict[str, list[Detection]] = {}
-    for d in detections:
-        by_frame.setdefault(d.frame_id, []).append(d)
+    `frames_rgb`/`frame_ids` given to `pipeline.run_frame_sequence`. For the synthetic
+    renderer only -- see the module docstring for why real footage needs
+    `build_annotated_video` instead."""
+    rendered = _render_frames(frames_rgb, frame_ids, detections, protected_zone, scale)
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    rendered = [
-        draw_detections(f, by_frame.get(fid, []), protected_zone, scale)
-        for f, fid in zip(frames_rgb, frame_ids, strict=True)
-    ]
     pil_frames = [Image.fromarray(cv2.cvtColor(r, cv2.COLOR_BGR2RGB)) for r in rendered]
     pil_frames[0].save(
         out_path,
@@ -133,4 +160,46 @@ def build_annotated_gif(
 
     if out_path.stat().st_size == 0:
         raise RuntimeError(f"{out_path} was written but is empty -- the GIF encoder failed silently.")
+    return out_path
+
+
+def build_annotated_video(
+    frames_rgb: list[np.ndarray],
+    frame_ids: list[str],
+    detections: list[Detection],
+    out_path: str | Path,
+    fps: float = 10.0,
+    protected_zone: tuple[float, float, float, float] | None = None,
+    scale: int = 1,
+) -> Path:
+    """Writes a WebM (VP8) video with every frame's detections drawn on it -- same
+    grouping/rendering as `build_annotated_gif`, but for real UAVDT/VisDrone footage; see
+    the module docstring for why. `scale` defaults to 1, not 5: real frames are already a
+    reasonable viewing size (`ingest.WORK_W`/`WORK_H`), unlike the synthetic renderer's
+    tiny 96x96 chips."""
+    rendered = _render_frames(frames_rgb, frame_ids, detections, protected_zone, scale)
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    h, w = rendered[0].shape[:2]
+    fourcc = cv2.VideoWriter_fourcc(*"VP80")  # type: ignore[attr-defined]
+    writer = cv2.VideoWriter(str(out_path), fourcc, fps, (w, h))
+    if not writer.isOpened():
+        raise RuntimeError(
+            f"OpenCV could not open a video writer for {out_path} (VP8/WebM codec) -- "
+            "this usually means the installed OpenCV build lacks video codec support."
+        )
+    try:
+        for frame in rendered:
+            writer.write(frame)
+    finally:
+        writer.release()
+
+    if out_path.stat().st_size == 0:
+        raise RuntimeError(
+            f"{out_path} was written but is empty -- the VP8 encoder likely failed silently "
+            "(writer.isOpened() can report success even when the underlying codec can't "
+            "actually encode). Check the OpenCV/ffmpeg build's codec support."
+        )
     return out_path

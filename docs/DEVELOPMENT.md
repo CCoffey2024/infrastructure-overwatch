@@ -39,12 +39,49 @@ python -m infrastructure_overwatch demo --domain night --calibrate
 `train-synthetic` trains the grid-CNN detector on the synthetic corridor renderer (no
 external data needed) and reports Day/Night validation F1. `demo` generates a synthetic
 moving-threat sequence, runs the full detect → track → event → calibrate pipeline, and
-writes `outputs/alerts.csv` / `outputs/events.csv`. `report` (requires the `dataviz`
-extra) turns those two CSVs into `outputs/report_card.png` and `outputs/dashboard.html`:
+writes `outputs/alerts.csv` / `outputs/events.csv` / `outputs/annotated_demo.gif`
+(`--no-video` to skip the last one). `report` (requires the `dataviz` extra) turns the two
+CSVs (plus the GIF, if present) into `outputs/report_card.png` and `outputs/dashboard.html`:
 
 ```bash
 python -m infrastructure_overwatch report
 ```
+
+## Training and running the demo on real footage
+
+A second, parallel pair of commands runs the identical detect → track → event → calibrate
+pipeline against real UAVDT/VisDrone footage instead of the synthetic renderer, for the
+`vehicle_of_interest` (and, with `--class-scheme vehicle_dismount`, `dismount`) track --
+see "Obtaining UAVDT" / "Obtaining VisDrone" below for the local data these need:
+
+```bash
+python -m infrastructure_overwatch train-real --epochs 25
+python -m infrastructure_overwatch demo-real --source "uavdt:M0601" --calibrate
+python -m infrastructure_overwatch report --video outputs/annotated_demo.webm
+```
+
+`train-real` trains on UAVDT alone by default, and reports Day/Night validation F1 on the
+same `UAVDT_DAY_VAL_SEQS`/`UAVDT_NIGHT_VAL_SEQS` split `notebooks/02_real_data_validation.ipynb`
+and `notebooks/08_visdrone_augmentation.ipynb` use, so a number measured here is directly
+comparable to what's already written up in `docs/METHODOLOGY_AND_LIMITATIONS.md`. Pass
+`--visdrone` (on by default when VisDrone is available; `--no-visdrone` to opt out) to
+combine VisDrone2019-DET + VisDrone2019-VID with UAVDT for training, matching
+`notebooks/08_visdrone_augmentation.ipynb`'s measured improvement.
+
+`demo-real --source` takes `<uavdt|visdrone-vid>:<sequence>` (e.g. `uavdt:M0601` or
+`visdrone-vid:uav0000086_00000_v`); `UAVDT_NIGHT_VAL_SEQS` (in `cli.py`) and
+`VisDroneVIDIndex.list_sequences("val")` list sequences not used in `train-real`'s own
+training split. Its `--zone` defaults to an illustrative placeholder
+(`REAL_DEMO_PROTECTED_ZONE` in `cli.py`) -- UAVDT/VisDrone are general drone-traffic
+benchmarks, not footage of an actual perimeter, so there is no real protected-zone geometry
+to read off the data; pass `--zone X0 Y0 X1 Y1` (in the 640x352 working canvas) for
+anything that should mean something for a specific sequence.
+
+`demo-real` writes an annotated **WebM video**, not a GIF: a real photographic frame has
+far more distinct colors than a GIF's 256-color palette can hold (measured directly against
+this project's own UAVDT frames -- see `viz.py`'s module docstring and `docs/VALIDATION.md`
+for the numbers), so `report` needs the `--video outputs/annotated_demo.webm` flag to embed
+it (its default still looks for `outputs/annotated_demo.gif`, matching the synthetic path).
 
 ## Obtaining UAVDT (for the real `vehicle_of_interest` track)
 

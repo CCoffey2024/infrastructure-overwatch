@@ -114,7 +114,7 @@ def build_dashboard(
     alerts_df: pd.DataFrame,
     events_df: pd.DataFrame,
     out_path: str | Path | None = None,
-    gif_path: str | Path | None = None,
+    media_path: str | Path | None = None,
     max_table_rows: int = 300,
 ):
     """The same four summary panels as `build_report_card`, as an interactive Plotly
@@ -122,9 +122,11 @@ def build_dashboard(
     operator wants to see the actual rows, not just their distribution) -- for a live
     monitoring view rather than a printed briefing.
 
-    `gif_path`, if given, is embedded above the charts as an `<img>` element pointing at an
-    already-rendered annotated sequence (see `viz.build_annotated_gif`) -- this function
-    only ever reads `alerts_df`/`events_df`, it never touches pixels itself.
+    `media_path`, if given, is embedded above the charts pointing at an already-rendered
+    annotated sequence -- a `.gif` (see `viz.build_annotated_gif`, the synthetic-renderer
+    path) as an `<img>`, anything else (`.webm`/`.mp4`, see `viz.build_annotated_video`,
+    the real-footage path) as a `<video>`. This function only ever reads
+    `alerts_df`/`events_df`, it never touches pixels itself.
     """
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
@@ -184,23 +186,35 @@ def build_dashboard(
     if out_path is not None:
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        if gif_path is None:
+        if media_path is None:
             fig.write_html(str(out_path))
         else:
-            _write_dashboard_with_gif(fig, out_path, Path(gif_path))
+            _write_dashboard_with_media(fig, out_path, Path(media_path))
     return fig
 
 
-def _write_dashboard_with_gif(fig, out_path: Path, gif_path: Path) -> None:
-    """`fig.write_html` produces a full standalone page on its own, so embedding an
-    `<img>` tag alongside it means building the page around `fig.to_html(full_html=False)`
-    instead. The GIF is referenced by a path relative to `out_path`'s own directory, so the
-    dashboard still finds it if both files are moved together."""
+def _write_dashboard_with_media(fig, out_path: Path, media_path: Path) -> None:
+    """`fig.write_html` produces a full standalone page on its own, so embedding the
+    annotated sequence alongside it means building the page around
+    `fig.to_html(full_html=False)` instead. `media_path` is referenced by a path relative
+    to `out_path`'s own directory, so the dashboard still finds it if both files are moved
+    together. `.gif` embeds as an `<img>` (see `viz.build_annotated_gif`); anything else
+    embeds as a `<video>` (see `viz.build_annotated_video`, which writes `.webm`)."""
     plot_html = fig.to_html(full_html=False, include_plotlyjs="cdn")
     try:
-        gif_src = gif_path.relative_to(out_path.parent).as_posix()
+        media_src = media_path.relative_to(out_path.parent).as_posix()
     except ValueError:
-        gif_src = gif_path.as_posix()
+        media_src = media_path.as_posix()
+
+    if media_path.suffix.lower() == ".gif":
+        media_html = f'<img src="{media_src}" alt="Annotated sequence" style="max-width: 100%; background: #000;">'
+    else:
+        media_html = (
+            f'<video controls style="max-width: 100%; background: #000;">'
+            f'<source src="{media_src}">'
+            f"Your browser can't play this video; open {media_src} directly (e.g. in VLC)."
+            f"</video>"
+        )
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -208,7 +222,7 @@ def _write_dashboard_with_gif(fig, out_path: Path, gif_path: Path) -> None:
 <body style="font-family: sans-serif; margin: 24px;">
 <h1>Infrastructure Overwatch — Live Dashboard</h1>
 <h2>Annotated sequence</h2>
-<img src="{gif_src}" alt="Annotated sequence" style="max-width: 100%; background: #000;">
+{media_html}
 {plot_html}
 </body>
 </html>"""
