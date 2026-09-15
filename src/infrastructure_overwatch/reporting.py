@@ -35,6 +35,15 @@ def build_report_card(alerts_df: pd.DataFrame, events_df: pd.DataFrame, out_path
     band breakdown, confidence distribution, and events by severity -- the
     four numbers an analyst supervisor would want in a shift-handoff report.
     """
+    import matplotlib
+
+    # This function only ever writes a PNG -- it has no business picking an interactive
+    # GUI backend (TkAgg, Qt, ...) just because one happens to be importable in whatever
+    # process calls it. Force the non-interactive default *before* importing pyplot, or
+    # matplotlib's own auto-detection decides instead -- which, on this project's own dev
+    # machine, silently broke this exact function the first time a FastAPI/anyio-based
+    # test module loaded earlier in the same pytest run and left Tk in a bad state.
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import seaborn as sns
 
