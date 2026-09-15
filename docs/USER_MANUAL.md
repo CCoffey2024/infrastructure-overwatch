@@ -17,17 +17,24 @@ for that use.
 
 ## What an alert (`Event`) means
 
-The pipeline raises three kinds of event, all scoped to a "protected zone" (the corridor
-or facility perimeter being watched):
+The pipeline raises several kinds of event. The first three are scoped to a "protected
+zone" (the corridor or facility perimeter being watched); the fourth is a separate,
+independent signal (see "Two additional signals" below):
 
 | Event type | What triggered it | What it means | What it does *not* mean |
 |---|---|---|---|
 | `ZONE_ENTRY` | A tracked object's center crossed into the protected zone | Something the detector classified as one of the four threat classes is now inside the watched area | Not a confirmed threat — see "reading a detection's confidence" below |
 | `STOPPED_IN_ZONE` | A tracked object stayed inside the zone with almost no movement for a sustained window | An object has stopped inside the protected area — historically the higher-consequence pattern (e.g. a vehicle stopping near a manifold) | Not evidence of intent; a legitimate vehicle can also stop |
 | `PERSON_LOITER` | A `dismount`-classified track stayed inside the zone for a sustained window | A person-shaped track has persisted in the protected area | Not identification of a person; the detector does not recognize individuals |
+| `VISUAL_ANOMALY` | A track's cropped appearance scored unlike anything in a reference gallery of "normal" imagery, when this optional signal is enabled | Something looks visually unfamiliar — worth a glance | Not a threat classification, and independent of zone geometry entirely — see "Two additional signals" below |
 
 Each event carries a `severity` (`medium`/`high`) and a `score` — both are triage hints to
 help you prioritize a queue of alerts, not a confidence that something bad is happening.
+
+A zone/loiter event only fires once a track has been seen enough times to be considered
+real (`MultiTracker.min_hits`, configurable per deployment) — a track glimpsed once and
+never seen again does not raise a `ZONE_ENTRY` on its own. This does not change what an
+event means once it fires, only how much noise a busy scene produces before one does.
 
 ## Reading a detection's confidence
 
@@ -77,11 +84,14 @@ Read this before trusting a specific alert in a specific condition:
 If your deployment has these optional modules enabled, two more things can show up
 alongside a detection:
 
-- **An anomaly score.** A separate, unlabeled "this looks unlike anything already seen"
-  signal (`anomaly.py`) — it has no notion of `drone`/`dismount`/`launch_flash`/
-  `vehicle_of_interest`, only visual unfamiliarity relative to a reference gallery. Read a
-  high anomaly score as "worth a glance because it's unusual," never as a threat
-  classification in its own right.
+- **A `VISUAL_ANOMALY` event.** A separate, unlabeled "this looks unlike anything already
+  seen" signal (`anomaly.py`) — it has no notion of `drone`/`dismount`/`launch_flash`/
+  `vehicle_of_interest`, only visual unfamiliarity relative to a reference gallery built
+  from imagery someone judged "normal" for this deployment. Read it as "worth a glance
+  because it's unusual," never as a threat classification in its own right — and remember
+  its accuracy depends entirely on how representative that reference gallery actually is
+  of your real operating conditions; a thin or mismatched gallery flags far more than it
+  should.
 - **A note-triage suggestion.** If you attach a free-text note to an alert, an optional
   module (`triage_nlp.py`) can suggest one of four categories
   (`confirmed_threat`/`false_alarm`/`sensor_or_equipment_issue`/

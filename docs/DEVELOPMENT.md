@@ -4,7 +4,7 @@
 
 ```bash
 uv venv
-uv pip install -e ".[dev,onnx,anomaly,dataviz]"   # what CI installs
+uv pip install -e ".[dev,onnx,anomaly,dataviz,web]"   # what CI installs
 # add `yolo` for the Ultralytics backend, `nlp` for the LoRA note-triage classifier
 ```
 
@@ -23,11 +23,14 @@ pytest -v
 
 `pytest`, `ruff`, and `mypy` all run without GPU and without the optional YOLO/UAVDT/NLP
 dependencies, in well under a minute — this covers geometry, grid encode/decode,
-calibration, tracking, event logic, evaluation, HOG-based anomaly scoring, and reporting,
-none of which need a GPU or a model download. `triage_nlp.py`'s tests only cover its
-pure-Python parts (`NOTE_CATEGORIES`, `TriageResult`) for the same reason ONNX/YOLO are
-kept out of the required dependency set — downloading real transformer weights isn't
-something CI should depend on.
+calibration, tracking (including the `min_hits` confirm-gate), event logic, evaluation
+(framewise P/R/F1 and COCO-style mAP/PR-curve/calibration-reliability), HOG-based anomaly
+scoring and its pipeline wiring, reporting, generic video/image-folder ingestion, N-sensor
+event fusion, the job store, and the FastAPI operator-console service end to end via
+`TestClient` (`web`/`httpx`) — none of which need a GPU or a model download. `triage_nlp.py`'s
+tests only cover its pure-Python parts (`NOTE_CATEGORIES`, `TriageResult`) for the same
+reason ONNX/YOLO are kept out of the required dependency set — downloading real
+transformer weights isn't something CI should depend on.
 
 ## Training and running the demo
 
@@ -68,20 +71,36 @@ comparable to what's already written up in `docs/METHODOLOGY_AND_LIMITATIONS.md`
 combine VisDrone2019-DET + VisDrone2019-VID with UAVDT for training, matching
 `notebooks/08_visdrone_augmentation.ipynb`'s measured improvement.
 
-`demo-real --source` takes `<uavdt|visdrone-vid>:<sequence>` (e.g. `uavdt:M0601` or
-`visdrone-vid:uav0000086_00000_v`); `UAVDT_NIGHT_VAL_SEQS` (in `cli.py`) and
-`VisDroneVIDIndex.list_sequences("val")` list sequences not used in `train-real`'s own
-training split. Its `--zone` defaults to an illustrative placeholder
-(`REAL_DEMO_PROTECTED_ZONE` in `cli.py`) -- UAVDT/VisDrone are general drone-traffic
-benchmarks, not footage of an actual perimeter, so there is no real protected-zone geometry
-to read off the data; pass `--zone X0 Y0 X1 Y1` (in the 640x352 working canvas) for
-anything that should mean something for a specific sequence.
+`demo-real --source` takes `<uavdt|visdrone-vid|video|folder>:<sequence-or-path>` --
+`uavdt:M0601` or `visdrone-vid:uav0000086_00000_v` for a named benchmark sequence (with
+ground truth, so `--calibrate` and accuracy scoring apply), or `video:C:\clips\
+corridor.mp4` / `folder:C:\clips\frames` for an arbitrary local video file or image
+folder (no ground truth -- `--calibrate` prints a warning and is a no-op, but detection/
+tracking/events/alerts run the same as any other source; see `ingest.load_video_frames`/
+`load_image_folder_frames`). `UAVDT_NIGHT_VAL_SEQS` (in `cli.py`) and
+`VisDroneVIDIndex.list_sequences("val")` list named-sequence candidates not used in
+`train-real`'s own training split. Its `--zone` defaults to an illustrative placeholder
+(`runs.DEFAULT_PROTECTED_ZONE`) -- none of the four source kinds are shot around an actual
+perimeter, so there is no real protected-zone geometry to read off the data; pass `--zone
+X0 Y0 X1 Y1` (in the 640x352 working canvas) for anything that should mean something for a
+specific sequence. `--track-min-hits N` (default 1, unchanged behavior) requires a track to
+be seen `N` times before it can raise a zone/loiter event -- raise it (e.g. 3) for a dense
+real-world scene, where a single-hit track is usually detector noise, not a real object;
+see `docs/METHODOLOGY_AND_LIMITATIONS.md#tracking`. `--anomaly-ref <path>` (a gallery saved
+by `fit-anomaly-reference`) scores mature tracks against it and adds any `VISUAL_ANOMALY`
+events it raises.
 
 `demo-real` writes an annotated **WebM video**, not a GIF: a real photographic frame has
 far more distinct colors than a GIF's 256-color palette can hold (measured directly against
 this project's own UAVDT frames -- see `viz.py`'s module docstring and `docs/VALIDATION.md`
 for the numbers), so `report` needs the `--video outputs/annotated_demo.webm` flag to embed
 it (its default still looks for `outputs/annotated_demo.gif`, matching the synthetic path).
+
+The identical `detect -> track -> event -> calibrate -> anomaly` pipeline this section runs
+from the CLI is also reachable from a browser: `python -m infrastructure_overwatch serve`
+(needs the `web` extra) starts a local operator console over the same `runs.
+run_real_pipeline` this section's commands call -- see
+[docs/OPERATOR_CONSOLE.md](OPERATOR_CONSOLE.md).
 
 ## Obtaining UAVDT (for the real `vehicle_of_interest` track)
 
