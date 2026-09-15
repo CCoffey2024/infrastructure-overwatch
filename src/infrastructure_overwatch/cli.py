@@ -241,7 +241,7 @@ def _cmd_demo(args: argparse.Namespace) -> int:
         protected_zone=PROTECTED_ZONE,
         frame_ids=frame_ids,
         fps=args.fps,
-        tracker=MultiTracker(),
+        tracker=MultiTracker(min_hits=args.track_min_hits),
         event_engine=PipelineEventEngine(protected_zone=PROTECTED_ZONE),
         calibrator=calibrator,
         triage_thresholds=DEFAULT_TRIAGE_THRESHOLDS,
@@ -406,7 +406,7 @@ def _cmd_demo_real(args: argparse.Namespace) -> int:
         protected_zone=zone,
         frame_ids=frame_ids,
         fps=args.fps,
-        tracker=MultiTracker(),
+        tracker=MultiTracker(min_hits=args.track_min_hits),
         event_engine=PipelineEventEngine(protected_zone=zone),
         calibrator=calibrator,
         triage_thresholds=DEFAULT_TRIAGE_THRESHOLDS,
@@ -488,6 +488,15 @@ def build_parser() -> argparse.ArgumentParser:
     demo_p.add_argument(
         "--calibrate", action="store_true", help="Self-calibrate confidence on this sequence's own ground truth."
     )
+    demo_p.add_argument(
+        "--track-min-hits",
+        type=int,
+        default=1,
+        help="A track only raises zone/loiter events once it's been seen this many times "
+        "(default 1, today's behavior: every track counts immediately). Raise this (e.g. 3) "
+        "for a dense real-world scene, where a single-hit track is often detector noise, not "
+        "a real object -- see MultiTracker.min_hits.",
+    )
     demo_p.add_argument("--seed", type=int, default=7)
     demo_p.add_argument("--out-dir", default="outputs")
     demo_p.add_argument(
@@ -561,6 +570,15 @@ def build_parser() -> argparse.ArgumentParser:
     demo_real_p.add_argument("--conf-thresh", type=float, default=0.4)
     demo_real_p.add_argument(
         "--calibrate", action="store_true", help="Self-calibrate confidence on this sequence's own ground truth."
+    )
+    demo_real_p.add_argument(
+        "--track-min-hits",
+        type=int,
+        default=1,
+        help="A track only raises zone/loiter events once it's been seen this many times "
+        "(default 1, today's behavior). Raise this (e.g. 3) for a dense real-world scene, "
+        "where a single-hit track is often detector noise, not a real object -- see "
+        "MultiTracker.min_hits.",
     )
     demo_real_p.add_argument(
         "--zone",

@@ -65,6 +65,10 @@ def run_frame_sequence(
         if calibrator is not None:
             tracked = route_detections(tracked, calibrator, triage_thresholds)
         all_detections.extend(tracked)
-        all_events.extend(event_engine.update(tracked, ts))
+        # Every tracked detection still lands in alerts.csv above; only tracks the tracker
+        # considers mature (see `MultiTracker.min_hits`) can raise a zone/loiter event, so a
+        # dense scene's inevitable one-hit tracks don't each fire their own event.
+        confirmed = [d for d in tracked if d.track_id is not None and tracker.is_confirmed(d.track_id)]
+        all_events.extend(event_engine.update(confirmed, ts))
 
     return PipelineResult(detections=all_detections, events=all_events)

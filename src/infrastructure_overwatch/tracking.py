@@ -22,19 +22,33 @@ class _TrackState:
     vx: float = 0.0
     vy: float = 0.0
     coast: int = 0
+    hits: int = 1
 
 
 class MultiTracker:
     """Predict each existing track forward with its last-known velocity,
     then greedily assign this frame's detections to tracks by descending
     IoU. Unmatched tracks coast (keep their predicted box) for `max_coast`
-    frames before being retired; unmatched detections spawn new tracks."""
+    frames before being retired; unmatched detections spawn new tracks.
 
-    def __init__(self, iou_thresh: float = 0.25, max_coast: int = 4):
+    Every detection still gets a `track_id` the instant its track is born
+    (so identity is stable from frame one) and is still returned in
+    `step()`'s output -- `min_hits` only gates `is_confirmed()`, which
+    `pipeline.run_frame_sequence` uses to decide whether a track is mature
+    enough to raise events. A dense scene otherwise floods events from
+    track-id churn: a fresh single-hit track entering a protected zone looks
+    identical to a real intruder until it's actually been seen a few times."""
+
+    def __init__(self, iou_thresh: float = 0.25, max_coast: int = 4, min_hits: int = 1):
         self.tracks: dict[int, _TrackState] = {}
         self.next_id = 1
         self.iou_thresh = float(iou_thresh)
         self.max_coast = int(max_coast)
+        self.min_hits = int(min_hits)
+
+    def is_confirmed(self, track_id: int) -> bool:
+        tr = self.tracks.get(track_id)
+        return tr is not None and tr.hits >= self.min_hits
 
     def _predict(self, tr: _TrackState) -> tuple[float, float, float, float]:
         x0, y0, x1, y1 = tr.box
@@ -56,9 +70,14 @@ class MultiTracker:
             matched_tracks.add(tid)
             matched_dets[di] = tid
             det = detections[di]
-            old_box = self.tracks[tid].box
+            old = self.tracks[tid]
             self.tracks[tid] = _TrackState(
-                box=det.xyxy, label=det.label, vx=det.x1 - old_box[0], vy=det.y1 - old_box[1], coast=0
+                box=det.xyxy,
+                label=det.label,
+                vx=det.x1 - old.box[0],
+                vy=det.y1 - old.box[1],
+                coast=0,
+                hits=old.hits + 1,
             )
 
         for tid in list(self.tracks):
