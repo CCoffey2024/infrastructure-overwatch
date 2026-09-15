@@ -45,6 +45,12 @@ class Job:
     sensor_id: str = "CAM01"
     output_dir: str = ""
     source_job_ids: list[str] = field(default_factory=list)
+    # The exact `runs.RealRunConfig` fields (minus `source`, tracked separately above)
+    # this run job was submitted with -- `service.py` needs to rebuild an identical
+    # config later (to re-derive ground truth for /metrics, or a raw frame for
+    # /frame/{n}) without guessing at what stride/cap/class_scheme/split were actually
+    # used, which could silently misalign against the persisted alerts.csv otherwise.
+    config: dict = field(default_factory=dict)
     summary: dict = field(default_factory=dict)
     error: str | None = None
 

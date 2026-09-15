@@ -359,6 +359,52 @@ def _cmd_fit_anomaly_reference(args: argparse.Namespace) -> int:
     return 0
 
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    """Starts the operator-console API (see `service.py`). Every job-submission route
+    accepts a local filesystem path (`video:`/`folder:`) and reads it directly -- there is
+    no upload boundary yet (Phase 3) -- so binding anywhere but loopback means any client
+    that can reach the port can ask this process to read any local file path it names.
+    `--host` therefore defaults to `127.0.0.1`; binding elsewhere requires the explicit
+    `--allow-remote` flag, so that exposure is a choice, not an accident. See
+    docs/OPERATOR_CONSOLE.md.
+    """
+    if args.host not in _LOOPBACK_HOSTS and not args.allow_remote:
+        print(
+            f"Refusing to bind {args.host!r}: it isn't loopback ({sorted(_LOOPBACK_HOSTS)}), and every job-"
+            "submission route reads a local filesystem path directly -- binding it without --allow-remote "
+            "would let any client that can reach this port ask the process to read arbitrary local files. "
+            "Pass --allow-remote if you understand and accept that for your network.",
+            file=sys.stderr,
+        )
+        return 1
+    if args.host not in _LOOPBACK_HOSTS:
+        print(
+            f"WARNING: binding {args.host!r} (not loopback). Every job-submission route reads a local "
+            "filesystem path directly, with no authentication -- anyone who can reach this port can ask "
+            "this process to read arbitrary local files.",
+            file=sys.stderr,
+        )
+
+    try:
+        import uvicorn
+    except ImportError:
+        print("The `web` extra is required: `pip install -e '.[web]'`", file=sys.stderr)
+        return 1
+
+    from .service import OperatorService, create_app
+
+    service = OperatorService(workspace_dir=args.workspace, default_weights_path=args.weights)
+    app = create_app(service)
+    try:
+        uvicorn.run(app, host=args.host, port=args.port)
+    finally:
+        service.shutdown()
+    return 0
+
+
 def _cmd_report(args: argparse.Namespace) -> int:
     import pandas as pd
 
@@ -568,6 +614,18 @@ def build_parser() -> argparse.ArgumentParser:
         "pass an empty string to skip embedding one.",
     )
     report_p.set_defaults(func=_cmd_report)
+
+    serve_p = sub.add_parser("serve", help="Start the operator-console API (needs the `web` extra).")
+    serve_p.add_argument("--host", default="127.0.0.1")
+    serve_p.add_argument("--port", type=int, default=8765)
+    serve_p.add_argument("--workspace", default="outputs", help="Where job records and their evidence are stored.")
+    serve_p.add_argument(
+        "--weights", default="outputs/weights/real_vehicle_detector.pt", help="Default detector weights for a run."
+    )
+    serve_p.add_argument(
+        "--allow-remote", action="store_true", help="Required to bind anywhere but loopback -- see _cmd_serve."
+    )
+    serve_p.set_defaults(func=_cmd_serve)
 
     return parser
 

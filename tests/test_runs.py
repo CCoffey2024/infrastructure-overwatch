@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 
@@ -88,3 +89,13 @@ def test_run_real_pipeline_respects_track_min_hits(tmp_path):
     output = runs.run_real_pipeline(config)
 
     assert output.result.events == []  # nothing could reach the confirm-gate
+
+
+def test_build_evaluation_tables_is_none_for_a_source_without_ground_truth(tmp_path):
+    video_path = tmp_path / "clip.mp4"
+    _write_synthetic_video(video_path, n_frames=4)
+    config = runs.RealRunConfig(weights_path="unused", source=f"video:{video_path}", stride=1)
+
+    result = runs.build_evaluation_tables(config, alerts_df=pd.DataFrame(columns=["frame_id"]))
+
+    assert result is None

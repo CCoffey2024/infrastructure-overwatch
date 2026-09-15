@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
+import pandas as pd
 
 from .calibration import DEFAULT_TRIAGE_THRESHOLDS, ConfidenceCalibrator, self_calibrate
 from .detectors.grid_cnn import GridCNNAdapter
@@ -177,3 +178,37 @@ def run_real_pipeline(config: RealRunConfig) -> RealRunOutput:
         has_ground_truth=labels is not None,
         calibration_warning=calibration_warning,
     )
+
+
+def build_evaluation_tables(config: RealRunConfig, alerts_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame] | None:
+    """Re-parses `config.source` and decodes its ground-truth grid labels (cheap -- no
+    detector inference, unlike `run_real_pipeline`) into the `frame_number/x1/y1/x2/y2/
+    label` shape `evaluation.py` expects, then maps the already-persisted `alerts_df`'s
+    string `frame_id` onto the same integer `frame_number` so the two line up. Returns
+    `None` for a `video:`/`folder:` source -- there's no ground truth to decode, so no
+    accuracy metric is available for it (detections/events/alerts still stand on their
+    own; this only feeds `evaluation.py`'s mAP/PR-curve/calibration-reliability functions).
+    """
+    from .grid_codec import decode_grid_predictions
+    from .ingest import VEHICLE_GRID_H, VEHICLE_GRID_W, WORK_H, WORK_W, class_names_for_scheme
+
+    frame_ids, _frames, labels, _rgb_frames, _dataset_kind = load_real_source(
+        config.source, config.stride, config.cap, config.class_scheme, config.split
+    )
+    if labels is None:
+        return None
+
+    class_names = class_names_for_scheme(config.class_scheme)
+    gt_rows = []
+    for i, label in enumerate(labels):
+        boxes = decode_grid_predictions(label, WORK_W, WORK_H, VEHICLE_GRID_W, VEHICLE_GRID_H, thresh=0.5, nms_iou=1.1)
+        for x1, y1, x2, y2, _confidence, class_id in boxes:
+            gt_rows.append(
+                {"frame_number": i, "x1": x1, "y1": y1, "x2": x2, "y2": y2, "label": class_names[int(class_id)]}
+            )
+    gt_df = pd.DataFrame(gt_rows, columns=["frame_number", "x1", "y1", "x2", "y2", "label"])
+
+    frame_number_by_id = {fid: i for i, fid in enumerate(frame_ids)}
+    pred_df = alerts_df.copy()
+    pred_df["frame_number"] = pred_df["frame_id"].map(frame_number_by_id)
+    return gt_df, pred_df
