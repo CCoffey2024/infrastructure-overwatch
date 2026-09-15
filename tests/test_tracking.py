@@ -48,6 +48,40 @@ def test_track_coasts_through_a_brief_miss_then_is_retired():
     assert tid not in tracker.tracks
 
 
+def test_min_hits_defaults_to_confirming_a_track_on_its_first_hit():
+    tracker = MultiTracker()  # min_hits=1, today's existing behavior
+    out = tracker.step([_det(0, 0)])
+    assert tracker.is_confirmed(out[0].track_id)
+
+
+def test_min_hits_gates_confirmation_until_enough_real_hits():
+    tracker = MultiTracker(iou_thresh=0.25, min_hits=3)
+    tid = tracker.step([_det(0, 0)])[0].track_id
+    assert not tracker.is_confirmed(tid)  # hit 1
+    tracker.step([_det(1, 1)])
+    assert not tracker.is_confirmed(tid)  # hit 2, still a small overlapping shift -> same track
+    tracker.step([_det(2, 2)])
+    assert tracker.is_confirmed(tid)  # hit 3 -- now confirmed
+
+
+def test_is_confirmed_is_false_for_an_unknown_or_retired_track():
+    tracker = MultiTracker(min_hits=1)
+    assert not tracker.is_confirmed(999)  # never existed
+    tid = tracker.step([_det(0, 0)])[0].track_id
+    for _ in range(tracker.max_coast + 1):
+        tracker.step([])  # coast past max_coast -> retired
+    assert not tracker.is_confirmed(tid)
+
+
+def test_coasting_does_not_advance_hit_count():
+    tracker = MultiTracker(iou_thresh=0.25, min_hits=2)
+    tid = tracker.step([_det(0, 0)])[0].track_id
+    tracker.step([])  # a missed/coasted frame must not count as a hit
+    assert not tracker.is_confirmed(tid)
+    tracker.step([_det(1, 1)])  # second real hit
+    assert tracker.is_confirmed(tid)
+
+
 def test_match_to_gt_finds_best_overlap():
     gt_boxes = [(0.0, 0.0, 10.0, 10.0, 101), (50.0, 50.0, 60.0, 60.0, 202)]
     assert match_to_gt((1.0, 1.0, 11.0, 11.0), gt_boxes) == 101

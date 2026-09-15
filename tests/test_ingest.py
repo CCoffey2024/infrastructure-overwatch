@@ -1,3 +1,5 @@
+import cv2
+import numpy as np
 import pytest
 from PIL import Image
 
@@ -9,6 +11,8 @@ from infrastructure_overwatch.ingest import (
     VisDroneVIDIndex,
     VisDroneVIDVehicleDataset,
     class_names_for_scheme,
+    load_image_folder_frames,
+    load_video_frames,
     visdrone_category_to_class_index,
 )
 
@@ -208,3 +212,85 @@ def test_visdrone_vid_vehicle_dataset_vehicle_dismount_keeps_pedestrian(tmp_path
     assert label_f1[..., 0].sum() == 2  # car + pedestrian(->dismount)
     assert label_f1[..., 5 + 0].sum() == 1  # car
     assert label_f1[..., 5 + 3].sum() == 1  # dismount
+
+
+# --- Generic ingestion: arbitrary local video/image-folder sources ----------
+
+
+def test_load_image_folder_frames_sorts_naturally_not_lexicographically(tmp_path):
+    # a lexicographic sort would order these "frame1", "frame10", "frame2" -- wrong
+    for name, color in [("frame1.jpg", (10, 10, 10)), ("frame2.jpg", (20, 20, 20)), ("frame10.jpg", (30, 30, 30))]:
+        Image.new("RGB", (64, 48), color=color).save(tmp_path / name)
+
+    frame_ids, frames, rgb_frames = load_image_folder_frames(tmp_path, work_w=64, work_h=48)
+
+    assert frame_ids == ["frame1", "frame2", "frame10"]
+    assert len(frames) == len(rgb_frames) == 3
+
+
+def test_load_image_folder_frames_applies_stride_and_cap(tmp_path):
+    for i in range(6):
+        Image.new("RGB", (64, 48), color=(i, i, i)).save(tmp_path / f"{i:03d}.jpg")
+
+    frame_ids, frames, _rgb = load_image_folder_frames(tmp_path, stride=2, cap=2, work_w=64, work_h=48)
+
+    assert frame_ids == ["000", "002"]  # every 2nd frame, capped at 2
+    assert len(frames) == 2
+
+
+def test_load_image_folder_frames_letterboxes_to_the_working_canvas(tmp_path):
+    Image.new("RGB", (200, 100), color=(50, 60, 70)).save(tmp_path / "a.jpg")
+
+    _ids, frames, rgb_frames = load_image_folder_frames(tmp_path, work_w=64, work_h=48)
+
+    assert rgb_frames[0].shape == (48, 64, 3)
+    assert frames[0].shape == (1, 48, 64)  # normalized grayscale, channel-first
+
+
+def test_load_image_folder_frames_raises_when_no_images_found(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        load_image_folder_frames(tmp_path)
+
+
+def test_load_image_folder_frames_ignores_non_image_files(tmp_path):
+    Image.new("RGB", (64, 48), color=(1, 2, 3)).save(tmp_path / "a.jpg")
+    (tmp_path / "readme.txt").write_text("not an image")
+
+    frame_ids, _frames, _rgb = load_image_folder_frames(tmp_path, work_w=64, work_h=48)
+
+    assert frame_ids == ["a"]
+
+
+def _write_synthetic_video(path, n_frames: int = 8, size=(64, 48), fps: float = 10.0) -> None:
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, size)
+    for i in range(n_frames):
+        frame = np.full((size[1], size[0], 3), fill_value=i * 10 % 256, dtype=np.uint8)
+        writer.write(frame)
+    writer.release()
+
+
+def test_load_video_frames_reads_and_letterboxes_a_real_video_file(tmp_path):
+    video_path = tmp_path / "clip.mp4"
+    _write_synthetic_video(video_path, n_frames=8, size=(64, 48))
+
+    frame_ids, frames, rgb_frames = load_video_frames(video_path, stride=1, cap=100, work_w=64, work_h=48)
+
+    assert len(frame_ids) == 8
+    assert frame_ids[0] == "clip_000000"
+    assert rgb_frames[0].shape == (48, 64, 3)
+    assert frames[0].shape == (1, 48, 64)
+
+
+def test_load_video_frames_applies_stride_and_cap(tmp_path):
+    video_path = tmp_path / "clip.mp4"
+    _write_synthetic_video(video_path, n_frames=10, size=(64, 48))
+
+    frame_ids, frames, _rgb = load_video_frames(video_path, stride=3, cap=2, work_w=64, work_h=48)
+
+    assert frame_ids == ["clip_000000", "clip_000003"]
+    assert len(frames) == 2
+
+
+def test_load_video_frames_raises_for_a_missing_file(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        load_video_frames(tmp_path / "does_not_exist.mp4")
