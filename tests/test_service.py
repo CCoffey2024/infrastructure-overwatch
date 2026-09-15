@@ -103,6 +103,27 @@ def test_metrics_404_for_a_source_without_ground_truth(client):
 
     resp = client.get(f"/api/jobs/{job_id}/metrics")
     assert resp.status_code == 404
+    # specifically "no ground truth", not "routed to the wrong handler" -- a generic
+    # /api/jobs/{id}/{table_name} route registered before /metrics previously shadowed
+    # it, and both failure modes happen to be 404s, so the status code alone can't tell
+    # them apart. Caught by hand-testing the live server against real ground-truth data;
+    # test_metrics_route_is_not_shadowed_by_the_generic_table_route below locks it in.
+    assert "ground truth" in resp.json()["detail"]
+
+
+def test_metrics_route_is_not_shadowed_by_the_generic_table_route(client, monkeypatch):
+    # Regression test for the exact bug above, without needing a real ground-truth
+    # fixture: stub read_metrics and confirm the /metrics route handler is the one that
+    # runs, not read_table's "No such table 'metrics'" rejection.
+    monkeypatch.setattr(client.service, "read_metrics", lambda job_id: {"map_50": 0.5})
+
+    resp = client.post("/api/jobs", json={"source": f"video:{client.video_path}", "conf_thresh": 0.01, "stride": 1})
+    job_id = resp.json()["job_id"]
+    _wait_for_status(client, job_id)
+
+    resp = client.get(f"/api/jobs/{job_id}/metrics")
+    assert resp.status_code == 200
+    assert resp.json() == {"map_50": 0.5}
 
 
 def test_frame_endpoint_returns_a_jpeg(client):

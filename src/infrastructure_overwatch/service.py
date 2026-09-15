@@ -300,15 +300,11 @@ def create_app(service: OperatorService | None = None):
         job = service.submit_fusion(source_job_ids, **fusion_kwargs)
         return job.to_dict()
 
-    @app.get("/api/jobs/{job_id}/{table_name}")
-    def read_table(job_id: str, table_name: str, offset: int = 0, limit: int = 200) -> list[dict]:
-        if table_name not in ("alerts", "events", "fusion_events", "fusion_contributors"):
-            raise HTTPException(status_code=404, detail=f"No such table {table_name!r}")
-        try:
-            return service.read_table(job_id, table_name, offset=offset, limit=min(limit, 1000))
-        except (KeyError, ValueError) as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-
+    # Registered before the generic /{table_name} catch-all below: Starlette matches
+    # routes in registration order, and a single-path-segment catch-all would otherwise
+    # swallow "/metrics" too (it did -- this ordering fixed a real bug caught by hand-
+    # testing the live server, not by the test suite, which never happened to hit this
+    # request order).
     @app.get("/api/jobs/{job_id}/metrics")
     def read_metrics(job_id: str) -> dict:
         try:
@@ -326,6 +322,15 @@ def create_app(service: OperatorService | None = None):
         except (KeyError, ValueError, IndexError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return Response(content=jpeg_bytes, media_type="image/jpeg")
+
+    @app.get("/api/jobs/{job_id}/{table_name}")
+    def read_table(job_id: str, table_name: str, offset: int = 0, limit: int = 200) -> list[dict]:
+        if table_name not in ("alerts", "events", "fusion_events", "fusion_contributors"):
+            raise HTTPException(status_code=404, detail=f"No such table {table_name!r}")
+        try:
+            return service.read_table(job_id, table_name, offset=offset, limit=min(limit, 1000))
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.delete("/api/jobs/{job_id}", status_code=204)
     def delete_job(job_id: str) -> None:
