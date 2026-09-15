@@ -274,9 +274,11 @@ def _cmd_demo(args: argparse.Namespace) -> int:
 
 def _cmd_demo_real(args: argparse.Namespace) -> int:
     """Same pipeline as `demo` (detect -> track -> events -> calibrate -> alerts/GIF), run
-    against a real UAVDT or VisDrone2019-VID sequence instead of the synthetic renderer --
-    a structurally different model (see `train-real`), so this is a separate command
-    rather than a flag on `demo`."""
+    against real imagery instead of the synthetic renderer -- a structurally different model
+    (see `train-real`), so this is a separate command rather than a flag on `demo`. `--source`
+    accepts a named benchmark sequence (`uavdt:`/`visdrone-vid:`, with ground truth, so
+    `--calibrate` and accuracy scoring apply) or an arbitrary local `video:`/`folder:` source
+    (no ground truth, but works on any footage, not just the three benchmarks)."""
     from collections.abc import Callable
 
     from PIL import Image
@@ -295,6 +297,8 @@ def _cmd_demo_real(args: argparse.Namespace) -> int:
         VisDroneVIDVehicleDataset,
         class_names_for_scheme,
         letterbox,
+        load_image_folder_frames,
+        load_video_frames,
     )
     from .pipeline import run_frame_sequence
     from .tracking import MultiTracker
@@ -305,17 +309,35 @@ def _cmd_demo_real(args: argparse.Namespace) -> int:
         return 1
 
     if ":" not in args.source:
-        print(f"--source must be '<uavdt|visdrone-vid>:<sequence>', got {args.source!r}", file=sys.stderr)
+        print(
+            f"--source must be '<uavdt|visdrone-vid|video|folder>:<sequence-or-path>', got {args.source!r}",
+            file=sys.stderr,
+        )
         return 1
     dataset_kind, seq = args.source.split(":", 1)
 
     ds: UAVDTVehicleDataset | VisDroneVIDVehicleDataset
     load_frame: Callable[[int], Image.Image]
+    # Generic `video:`/`folder:` sources carry no ground truth, so `labels` stays `None` for
+    # them -- `--calibrate` has nothing to self-calibrate against (checked below), and
+    # mAP/F1 evaluation likewise isn't available for these sources.
+    labels: list | None = None
 
     if dataset_kind == "uavdt":
         uavdt_index = UAVDTIndex()
         ds = UAVDTVehicleDataset(uavdt_index, [seq], stride=args.stride, cap=args.cap, class_scheme=args.class_scheme)
         load_frame = lambda frame_idx: uavdt_index.load_frame(seq, frame_idx)  # noqa: E731
+        if len(ds) == 0:
+            print(f"No frames found for --source {args.source!r}; check the sequence name.", file=sys.stderr)
+            return 1
+        frame_ids = [f"{seq}_{fidx:06d}" for _seq, fidx in ds.items]
+        frames, labels, rgb_frames = [], [], []
+        for i, (_seq, fidx) in enumerate(ds.items):
+            gray, label = ds[i]
+            frames.append(gray)
+            labels.append(label)
+            canvas, _scale, _pad_x, _pad_y = letterbox(load_frame(fidx), WORK_W, WORK_H)
+            rgb_frames.append(np.asarray(canvas))
     elif dataset_kind == "visdrone-vid":
         visdrone_vid_index = VisDroneVIDIndex()
         ds = VisDroneVIDVehicleDataset(
@@ -327,12 +349,29 @@ def _cmd_demo_real(args: argparse.Namespace) -> int:
             class_scheme=args.class_scheme,
         )
         load_frame = lambda frame_idx: visdrone_vid_index.load_frame(args.split, seq, frame_idx)  # noqa: E731
+        if len(ds) == 0:
+            print(f"No frames found for --source {args.source!r}; check the sequence name.", file=sys.stderr)
+            return 1
+        frame_ids = [f"{seq}_{fidx:06d}" for _seq, fidx in ds.items]
+        frames, labels, rgb_frames = [], [], []
+        for i, (_seq, fidx) in enumerate(ds.items):
+            gray, label = ds[i]
+            frames.append(gray)
+            labels.append(label)
+            canvas, _scale, _pad_x, _pad_y = letterbox(load_frame(fidx), WORK_W, WORK_H)
+            rgb_frames.append(np.asarray(canvas))
+    elif dataset_kind in ("video", "folder"):
+        loader = load_video_frames if dataset_kind == "video" else load_image_folder_frames
+        try:
+            frame_ids, frames, rgb_frames = loader(seq, stride=args.stride, cap=args.cap, work_w=WORK_W, work_h=WORK_H)
+        except FileNotFoundError as source_error:
+            print(str(source_error), file=sys.stderr)
+            return 1
     else:
-        print(f"Unknown --source dataset {dataset_kind!r}; expected 'uavdt' or 'visdrone-vid'.", file=sys.stderr)
-        return 1
-
-    if len(ds) == 0:
-        print(f"No frames found for --source {args.source!r}; check the sequence name.", file=sys.stderr)
+        print(
+            f"Unknown --source kind {dataset_kind!r}; expected 'uavdt', 'visdrone-vid', 'video', or 'folder'.",
+            file=sys.stderr,
+        )
         return 1
 
     class_names = class_names_for_scheme(args.class_scheme)
@@ -348,20 +387,18 @@ def _cmd_demo_real(args: argparse.Namespace) -> int:
         stage_channels=(24, 48, 96, 96),
     )
 
-    frame_ids = [f"{seq}_{fidx:06d}" for _seq, fidx in ds.items]
-    frames, labels, rgb_frames = [], [], []
-    for i, (_seq, fidx) in enumerate(ds.items):
-        gray, label = ds[i]
-        frames.append(gray)
-        labels.append(label)
-        canvas, _scale, _pad_x, _pad_y = letterbox(load_frame(fidx), WORK_W, WORK_H)
-        rgb_frames.append(np.asarray(canvas))
-
     zone = tuple(args.zone) if args.zone else REAL_DEMO_PROTECTED_ZONE
 
     calibrator = None
     if args.calibrate:
-        calibrator = _self_calibrate(adapter, frames, labels, WORK_W, WORK_H, VEHICLE_GRID_W, VEHICLE_GRID_H)
+        if labels is None:
+            print(
+                f"--calibrate has no effect for a {dataset_kind!r} source: there is no ground truth to "
+                "self-calibrate against. Detections/tracking/events/alerts still run, uncalibrated.",
+                file=sys.stderr,
+            )
+        else:
+            calibrator = _self_calibrate(adapter, frames, labels, WORK_W, WORK_H, VEHICLE_GRID_W, VEHICLE_GRID_H)
 
     result = run_frame_sequence(
         frames=frames,
@@ -485,21 +522,27 @@ def build_parser() -> argparse.ArgumentParser:
     train_real_p.set_defaults(func=_cmd_train_real)
 
     demo_real_p = sub.add_parser(
-        "demo-real", help="Run the end-to-end pipeline on a real UAVDT or VisDrone2019-VID sequence."
+        "demo-real",
+        help="Run the end-to-end pipeline on real imagery: a UAVDT/VisDrone2019-VID benchmark "
+        "sequence, or an arbitrary local video file or image folder.",
     )
     demo_real_p.add_argument("--weights", default="outputs/weights/real_vehicle_detector.pt")
     demo_real_p.add_argument(
         "--source",
         default="uavdt:M0601",
-        help="'<uavdt|visdrone-vid>:<sequence>', e.g. 'uavdt:M0601' or "
-        "'visdrone-vid:uav0000086_00000_v'. UAVDT_NIGHT_VAL_SEQS/list_sequences('val') list "
-        "candidates not used in `train-real`'s training split.",
+        help="'<uavdt|visdrone-vid|video|folder>:<sequence-or-path>', e.g. 'uavdt:M0601', "
+        "'visdrone-vid:uav0000086_00000_v', 'video:C:\\clips\\corridor.mp4', or "
+        "'folder:C:\\clips\\frames'. UAVDT_NIGHT_VAL_SEQS/list_sequences('val') list uavdt/"
+        "visdrone-vid candidates not used in `train-real`'s training split. A 'video:'/"
+        "'folder:' source has no ground truth, so --calibrate is a no-op for it (a warning "
+        "is printed) and it can't be scored for mAP/F1 -- detection/tracking/events/alerts "
+        "still run normally.",
     )
     demo_real_p.add_argument(
         "--split",
         choices=["train", "val", "test-dev"],
         default="val",
-        help="VisDrone2019-VID split to read --source from (ignored for a uavdt: source).",
+        help="VisDrone2019-VID split to read --source from (ignored for uavdt/video/folder sources).",
     )
     demo_real_p.add_argument(
         "--class-scheme",
@@ -507,7 +550,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="vehicle_only",
         help="Must match whatever --weights was trained with.",
     )
-    demo_real_p.add_argument("--stride", type=int, default=2, help="Sub-sample every Nth ground-truth frame.")
+    demo_real_p.add_argument(
+        "--stride",
+        type=int,
+        default=2,
+        help="Sub-sample every Nth frame (Nth ground-truth frame for uavdt/visdrone-vid).",
+    )
     demo_real_p.add_argument("--cap", type=int, default=150, help="Maximum number of frames to pull.")
     demo_real_p.add_argument("--fps", type=float, default=10.0)
     demo_real_p.add_argument("--conf-thresh", type=float, default=0.4)

@@ -1,14 +1,16 @@
-"""Turns raw sensor input into what the rest of the pipeline consumes:
-`FrameRecord`s for a live/recorded video feed, or an indexed, letterboxed
-real-vehicle(+dismount) dataset for the `vehicle_of_interest` (and, under the
-`vehicle_dismount` class scheme, `dismount`) track.
+"""Turns raw sensor input into what the rest of the pipeline consumes: letterboxed frames
+ready for a detector, either from an arbitrary local video/image-folder source
+(`load_video_frames`/`load_image_folder_frames` -- no ground truth, works on anything) or
+from an indexed real-vehicle(+dismount) benchmark dataset for the `vehicle_of_interest`
+(and, under the `vehicle_dismount` class scheme, `dismount`) track.
 
-This ingestion layer is deliberately built to combine an arbitrary number of independent
-real-data sources for the same track, not just one -- a pipeline wired to a single
-sensor/dataset is a much weaker validation of "this generalizes" than several
-independently-collected sources agreeing. Three sources feed it today, all optional and
-machine-local (not included in this repo -- see docs/DEVELOPMENT.md for how to obtain any
-of them):
+The named-benchmark readers below are for training and accuracy evaluation, where labeled
+ground truth is exactly the point. This ingestion layer is deliberately built to combine an
+arbitrary number of independent real-data sources for the same track, not just one -- a
+pipeline wired to a single sensor/dataset is a much weaker validation of "this generalizes"
+than several independently-collected sources agreeing. Three sources feed it today, all
+optional and machine-local (not included in this repo -- see docs/DEVELOPMENT.md for how to
+obtain any of them):
 
 - `UAVDTIndex` reads the UAVDT benchmark (Du et al., ECCV 2018): drone-video sequences with
   real car/truck/bus ground truth, but no person/pedestrian class.
@@ -33,6 +35,7 @@ training. Everything else in this module works without any of them installed.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -43,57 +46,6 @@ from PIL import Image, ImageFilter
 from torch.utils.data import Dataset
 
 from .grid_codec import encode_grid_label
-from .types import FrameRecord
-
-# --- Video ingestion -------------------------------------------------------
-
-
-class OpenCVVideoIngestAdapter:
-    def __init__(self, sample_every_n: int = 1, jpeg_quality: int = 92):
-        self.sample_every_n = max(1, int(sample_every_n))
-        self.jpeg_quality = int(jpeg_quality)
-
-    def extract(self, video_path, output_dir, sensor_id: str = "CAM01", modality: str = "EO") -> pd.DataFrame:
-        video_path = Path(video_path)
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        cap = cv2.VideoCapture(str(video_path))
-        if not cap.isOpened():
-            raise FileNotFoundError(f"Could not open {video_path}")
-
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-        records = []
-        frame_number = 0
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            if frame_number % self.sample_every_n == 0:
-                timestamp_s = frame_number / fps
-                frame_id = f"{sensor_id}_{frame_number:06d}"
-                out = output_dir / f"{frame_id}.jpg"
-                cv2.imwrite(str(out), frame, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
-                rec = FrameRecord(
-                    frame_id=frame_id,
-                    sensor_id=sensor_id,
-                    timestamp_s=timestamp_s,
-                    modality=modality,
-                    source_video=video_path.name,
-                    frame_number=frame_number,
-                    width=width,
-                    height=height,
-                    image_path=str(out),
-                )
-                records.append(rec.to_dict())
-            frame_number += 1
-
-        cap.release()
-        return pd.DataFrame(records)
-
 
 # --- Real vehicle data: UAVDT ----------------------------------------------
 
@@ -153,6 +105,106 @@ def letterbox(img: Image.Image, target_w: int = WORK_W, target_h: int = WORK_H, 
 
 def letterbox_boxes(boxes_xywh, scale: float, pad_x: int, pad_y: int):
     return [(x * scale + pad_x, y * scale + pad_y, w * scale, h * scale) for (x, y, w, h) in boxes_xywh]
+
+
+# --- Generic ingestion: an arbitrary local video file or folder of still images ---------
+#
+# Unlike the named-benchmark readers below, these carry no ground truth -- there is no
+# annotation file to read for "some mp4 I have" or "a folder of jpegs off a drone". They
+# return the same (frame_ids, frames, rgb_frames) shape `cli.py`'s `demo-real` command
+# already builds inline for UAVDT/VisDrone, so either source drops into the same
+# detect/track/event pipeline; `--calibrate` and mAP/F1 evaluation just aren't available
+# for them (nothing to self-calibrate or score against), which callers must check for
+# rather than assume.
+
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+_NATURAL_SORT_SPLIT = re.compile(r"(\d+)")
+
+
+def _natural_sort_key(name: str) -> list:
+    """Splits a filename into text/number chunks so `frame2.jpg` sorts before
+    `frame10.jpg` -- a plain string sort gets this wrong for any source that
+    isn't zero-padded (VisDrone/UAVDT always are; an arbitrary folder often
+    isn't)."""
+    return [int(tok) if tok.isdigit() else tok.lower() for tok in _NATURAL_SORT_SPLIT.split(name)]
+
+
+def _letterboxed_frame(img: Image.Image, work_w: int, work_h: int) -> tuple[np.ndarray, np.ndarray]:
+    """One image -> (rgb canvas array, normalized grayscale canvas array),
+    the same letterbox-then-split-channel shape every named-dataset loader
+    below produces per frame."""
+    canvas, _scale, _pad_x, _pad_y = letterbox(img, work_w, work_h)
+    rgb = np.asarray(canvas)
+    gray = np.asarray(canvas.convert("L")).astype(np.float32) / 255.0
+    return rgb, gray[np.newaxis, :, :]
+
+
+def load_video_frames(
+    video_path, stride: int = 2, cap: int = 150, work_w: int = WORK_W, work_h: int = WORK_H
+) -> tuple[list[str], list[np.ndarray], list[np.ndarray]]:
+    """Reads an arbitrary local video file with OpenCV, letterboxes every
+    `stride`-th frame (up to `cap` sampled frames) onto a fixed working
+    canvas, and returns `(frame_ids, frames, rgb_frames)` -- `frames` ready
+    for a grid-CNN detector, `rgb_frames` ready for annotated-video
+    rendering. Raises `FileNotFoundError` if the file can't be opened or
+    yields no frames."""
+    video_path = Path(video_path)
+    capture = cv2.VideoCapture(str(video_path))
+    if not capture.isOpened():
+        raise FileNotFoundError(f"Could not open {video_path}")
+
+    stem = video_path.stem
+    frame_ids: list[str] = []
+    frames: list[np.ndarray] = []
+    rgb_frames: list[np.ndarray] = []
+    frame_number = 0
+    try:
+        while len(frame_ids) < cap:
+            ok, frame_bgr = capture.read()
+            if not ok:
+                break
+            if frame_number % stride == 0:
+                img = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+                rgb, gray = _letterboxed_frame(img, work_w, work_h)
+                rgb_frames.append(rgb)
+                frames.append(gray)
+                frame_ids.append(f"{stem}_{frame_number:06d}")
+            frame_number += 1
+    finally:
+        capture.release()
+
+    if not frame_ids:
+        raise FileNotFoundError(f"No frames could be read from {video_path}")
+    return frame_ids, frames, rgb_frames
+
+
+def load_image_folder_frames(
+    folder_path, stride: int = 1, cap: int = 150, work_w: int = WORK_W, work_h: int = WORK_H
+) -> tuple[list[str], list[np.ndarray], list[np.ndarray]]:
+    """Reads an arbitrary local folder of still images (jpg/jpeg/png/bmp/tif),
+    ordered naturally by filename, letterboxes every `stride`-th image (up to
+    `cap` sampled frames), and returns the same `(frame_ids, frames,
+    rgb_frames)` shape `load_video_frames` does. Raises `FileNotFoundError`
+    if the folder has no recognized image files."""
+    folder_path = Path(folder_path)
+    paths = sorted(
+        (p for p in folder_path.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES),
+        key=lambda p: _natural_sort_key(p.name),
+    )
+    if not paths:
+        raise FileNotFoundError(f"No image files found under {folder_path}")
+    paths = paths[::stride][:cap]
+
+    frame_ids: list[str] = []
+    frames: list[np.ndarray] = []
+    rgb_frames: list[np.ndarray] = []
+    for p in paths:
+        img = Image.open(p).convert("RGB")
+        rgb, gray = _letterboxed_frame(img, work_w, work_h)
+        rgb_frames.append(rgb)
+        frames.append(gray)
+        frame_ids.append(p.stem)
+    return frame_ids, frames, rgb_frames
 
 
 @dataclass
