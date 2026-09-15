@@ -90,6 +90,45 @@ def triage_band(calibrated_confidence: float, thresholds: TriageThresholds = DEF
     return "analyst_review"
 
 
+def self_calibrate(
+    adapter, frames, labels, img_w: int, img_h: int, grid_w: int, grid_h: int
+) -> ConfidenceCalibrator | None:
+    """A quick self-calibration pass: labels this run's own detections against its own
+    ground truth (`labels`, one `grid_codec.encode_grid_label` tensor per frame -- the same
+    format both the synthetic renderer and the real UAVDT/VisDrone datasets produce). A
+    real deployment should calibrate on a held-out validation set instead -- this exists so
+    `--calibrate` has something to show without requiring a separate validation run. Shared
+    by `cli.py` (`demo`/`demo-real`) and `runs.py` (the operator-console job executor), so
+    both entry points calibrate identically.
+    """
+    from .geometry import iou_xyxy
+    from .grid_codec import decode_grid_predictions
+
+    confs, is_tp = [], []
+    for frame, label in zip(frames, labels, strict=True):
+        preds = adapter.detect(frame, "cal")
+        gt_boxes = decode_grid_predictions(label, img_w, img_h, grid_w, grid_h, thresh=0.5, nms_iou=1.1)
+
+        matched: set[int] = set()
+        for p in preds:
+            best_iou, best_j = 0.0, -1
+            for j, g in enumerate(gt_boxes):
+                if j in matched:
+                    continue
+                v = iou_xyxy(p.xyxy, g[:4])
+                if v > best_iou:
+                    best_iou, best_j = v, j
+            confs.append(p.confidence)
+            if best_iou >= 0.3:
+                is_tp.append(1)
+                matched.add(best_j)
+            else:
+                is_tp.append(0)
+    if not confs:
+        return None
+    return ConfidenceCalibrator().fit(np.array(confs), np.array(is_tp))
+
+
 def route_detections(
     detections: list[Detection],
     calibrator: ConfidenceCalibrator,

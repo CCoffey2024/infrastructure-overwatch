@@ -10,12 +10,8 @@ import argparse
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
-
-if TYPE_CHECKING:
-    from .calibration import ConfidenceCalibrator
 
 
 def _cmd_train_synthetic(args: argparse.Namespace) -> int:
@@ -59,13 +55,6 @@ def _cmd_train_synthetic(args: argparse.Namespace) -> int:
 UAVDT_DAY_TRAIN_SEQS = ["M0101", "M0402", "M1201", "M1306"]
 UAVDT_DAY_VAL_SEQS = ["M0403", "M1301"]
 UAVDT_NIGHT_VAL_SEQS = ["M0601", "M0701", "M1009", "M1101"]
-
-# An illustrative "protected zone" for the real-data demo -- UAVDT/VisDrone are general
-# drone-traffic benchmarks, not footage of an actual perimeter, so there is no real
-# protected-zone geometry to read off the data. This is a placeholder covering roughly the
-# lower-central two-thirds of the working canvas (WORK_W/WORK_H); override with `--zone` for
-# anything that should mean something for a specific sequence.
-REAL_DEMO_PROTECTED_ZONE = (96.0, 88.0, 544.0, 334.0)
 
 
 def _cmd_train_real(args: argparse.Namespace) -> int:
@@ -164,47 +153,8 @@ def _apply_anomaly_scoring(anomaly_ref: str | None, result, rgb_frames, frame_id
     result.events.extend(anomaly_events)
 
 
-def _self_calibrate(
-    adapter, frames, labels, img_w: int, img_h: int, grid_w: int, grid_h: int
-) -> ConfidenceCalibrator | None:
-    """A quick self-calibration pass: label this run's own detections against its own
-    ground truth (`labels`, one `grid_codec.encode_grid_label` tensor per frame -- the same
-    format both the synthetic renderer and the real UAVDT/VisDrone datasets produce). A
-    real deployment should calibrate on a held-out validation set instead (see
-    `calibration.ConfidenceCalibrator`) -- this exists so `--calibrate` has something to
-    show without requiring a separate validation run.
-    """
-    from .calibration import ConfidenceCalibrator
-    from .geometry import iou_xyxy
-    from .grid_codec import decode_grid_predictions
-
-    confs, is_tp = [], []
-    for frame, label in zip(frames, labels, strict=True):
-        preds = adapter.detect(frame, "cal")
-        gt_boxes = decode_grid_predictions(label, img_w, img_h, grid_w, grid_h, thresh=0.5, nms_iou=1.1)
-
-        matched: set[int] = set()
-        for p in preds:
-            best_iou, best_j = 0.0, -1
-            for j, g in enumerate(gt_boxes):
-                if j in matched:
-                    continue
-                v = iou_xyxy(p.xyxy, g[:4])
-                if v > best_iou:
-                    best_iou, best_j = v, j
-            confs.append(p.confidence)
-            if best_iou >= 0.3:
-                is_tp.append(1)
-                matched.add(best_j)
-            else:
-                is_tp.append(0)
-    if not confs:
-        return None
-    return ConfidenceCalibrator().fit(np.array(confs), np.array(is_tp))
-
-
 def _cmd_demo(args: argparse.Namespace) -> int:
-    from .calibration import DEFAULT_TRIAGE_THRESHOLDS
+    from .calibration import DEFAULT_TRIAGE_THRESHOLDS, self_calibrate
     from .detectors.grid_cnn import GridCNNAdapter
     from .events import PipelineEventEngine
     from .grid_codec import encode_grid_label
@@ -249,7 +199,7 @@ def _cmd_demo(args: argparse.Namespace) -> int:
             encode_grid_label(boxes, IMG_SIZE, IMG_SIZE, GRID, GRID, N_SYNTHETIC_CLASSES)
             for _img, boxes, _ids in sequence
         ]
-        calibrator = _self_calibrate(adapter, frames, labels, IMG_SIZE, IMG_SIZE, GRID, GRID)
+        calibrator = self_calibrate(adapter, frames, labels, IMG_SIZE, IMG_SIZE, GRID, GRID)
 
     result = run_frame_sequence(
         frames=frames,
@@ -295,141 +245,43 @@ def _cmd_demo_real(args: argparse.Namespace) -> int:
     (see `train-real`), so this is a separate command rather than a flag on `demo`. `--source`
     accepts a named benchmark sequence (`uavdt:`/`visdrone-vid:`, with ground truth, so
     `--calibrate` and accuracy scoring apply) or an arbitrary local `video:`/`folder:` source
-    (no ground truth, but works on any footage, not just the three benchmarks)."""
-    from collections.abc import Callable
-
-    from PIL import Image
-
-    from .calibration import DEFAULT_TRIAGE_THRESHOLDS
-    from .detectors.grid_cnn import GridCNNAdapter
-    from .events import PipelineEventEngine
-    from .ingest import (
-        VEHICLE_GRID_H,
-        VEHICLE_GRID_W,
-        WORK_H,
-        WORK_W,
-        UAVDTIndex,
-        UAVDTVehicleDataset,
-        VisDroneVIDIndex,
-        VisDroneVIDVehicleDataset,
-        class_names_for_scheme,
-        letterbox,
-        load_image_folder_frames,
-        load_video_frames,
-    )
-    from .pipeline import run_frame_sequence
-    from .tracking import MultiTracker
+    (no ground truth, but works on any footage, not just the three benchmarks). The actual
+    detect/track/calibrate/anomaly-score work lives in `runs.run_real_pipeline`, shared with
+    `service.py`'s job executor -- this function is just the argparse/stdout/CSV shell
+    around it.
+    """
+    from . import runs
 
     weights_path = Path(args.weights)
     if not weights_path.exists():
         print(f"No weights at {weights_path}; run `train-real` first.", file=sys.stderr)
         return 1
 
-    if ":" not in args.source:
-        print(
-            f"--source must be '<uavdt|visdrone-vid|video|folder>:<sequence-or-path>', got {args.source!r}",
-            file=sys.stderr,
-        )
-        return 1
-    dataset_kind, seq = args.source.split(":", 1)
-
-    ds: UAVDTVehicleDataset | VisDroneVIDVehicleDataset
-    load_frame: Callable[[int], Image.Image]
-    # Generic `video:`/`folder:` sources carry no ground truth, so `labels` stays `None` for
-    # them -- `--calibrate` has nothing to self-calibrate against (checked below), and
-    # mAP/F1 evaluation likewise isn't available for these sources.
-    labels: list | None = None
-
-    if dataset_kind == "uavdt":
-        uavdt_index = UAVDTIndex()
-        ds = UAVDTVehicleDataset(uavdt_index, [seq], stride=args.stride, cap=args.cap, class_scheme=args.class_scheme)
-        load_frame = lambda frame_idx: uavdt_index.load_frame(seq, frame_idx)  # noqa: E731
-        if len(ds) == 0:
-            print(f"No frames found for --source {args.source!r}; check the sequence name.", file=sys.stderr)
-            return 1
-        frame_ids = [f"{seq}_{fidx:06d}" for _seq, fidx in ds.items]
-        frames, labels, rgb_frames = [], [], []
-        for i, (_seq, fidx) in enumerate(ds.items):
-            gray, label = ds[i]
-            frames.append(gray)
-            labels.append(label)
-            canvas, _scale, _pad_x, _pad_y = letterbox(load_frame(fidx), WORK_W, WORK_H)
-            rgb_frames.append(np.asarray(canvas))
-    elif dataset_kind == "visdrone-vid":
-        visdrone_vid_index = VisDroneVIDIndex()
-        ds = VisDroneVIDVehicleDataset(
-            visdrone_vid_index,
-            split=args.split,
-            seq_list=[seq],
-            stride=args.stride,
-            cap=args.cap,
-            class_scheme=args.class_scheme,
-        )
-        load_frame = lambda frame_idx: visdrone_vid_index.load_frame(args.split, seq, frame_idx)  # noqa: E731
-        if len(ds) == 0:
-            print(f"No frames found for --source {args.source!r}; check the sequence name.", file=sys.stderr)
-            return 1
-        frame_ids = [f"{seq}_{fidx:06d}" for _seq, fidx in ds.items]
-        frames, labels, rgb_frames = [], [], []
-        for i, (_seq, fidx) in enumerate(ds.items):
-            gray, label = ds[i]
-            frames.append(gray)
-            labels.append(label)
-            canvas, _scale, _pad_x, _pad_y = letterbox(load_frame(fidx), WORK_W, WORK_H)
-            rgb_frames.append(np.asarray(canvas))
-    elif dataset_kind in ("video", "folder"):
-        loader = load_video_frames if dataset_kind == "video" else load_image_folder_frames
-        try:
-            frame_ids, frames, rgb_frames = loader(seq, stride=args.stride, cap=args.cap, work_w=WORK_W, work_h=WORK_H)
-        except FileNotFoundError as source_error:
-            print(str(source_error), file=sys.stderr)
-            return 1
-    else:
-        print(
-            f"Unknown --source kind {dataset_kind!r}; expected 'uavdt', 'visdrone-vid', 'video', or 'folder'.",
-            file=sys.stderr,
-        )
-        return 1
-
-    class_names = class_names_for_scheme(args.class_scheme)
-    adapter = GridCNNAdapter.load(
-        str(weights_path),
-        n_classes=len(class_names),
-        grid_h=VEHICLE_GRID_H,
-        grid_w=VEHICLE_GRID_W,
-        class_names=class_names,
-        img_w=WORK_W,
-        img_h=WORK_H,
-        thresh=args.conf_thresh,
-        stage_channels=(24, 48, 96, 96),
-    )
-
-    zone = tuple(args.zone) if args.zone else REAL_DEMO_PROTECTED_ZONE
-
-    calibrator = None
-    if args.calibrate:
-        if labels is None:
-            print(
-                f"--calibrate has no effect for a {dataset_kind!r} source: there is no ground truth to "
-                "self-calibrate against. Detections/tracking/events/alerts still run, uncalibrated.",
-                file=sys.stderr,
-            )
-        else:
-            calibrator = _self_calibrate(adapter, frames, labels, WORK_W, WORK_H, VEHICLE_GRID_W, VEHICLE_GRID_H)
-
-    result = run_frame_sequence(
-        frames=frames,
-        detector=adapter,
-        protected_zone=zone,
-        frame_ids=frame_ids,
+    config = runs.RealRunConfig(
+        weights_path=str(weights_path),
+        source=args.source,
+        split=args.split,
+        class_scheme=args.class_scheme,
+        stride=args.stride,
+        cap=args.cap,
         fps=args.fps,
-        tracker=MultiTracker(min_hits=args.track_min_hits),
-        event_engine=PipelineEventEngine(protected_zone=zone),
-        calibrator=calibrator,
-        triage_thresholds=DEFAULT_TRIAGE_THRESHOLDS,
+        conf_thresh=args.conf_thresh,
+        calibrate=args.calibrate,
+        track_min_hits=args.track_min_hits,
+        anomaly_ref=args.anomaly_ref,
+        zone=tuple(args.zone) if args.zone else None,
     )
-    _apply_anomaly_scoring(args.anomaly_ref, result, rgb_frames, frame_ids, args.fps)
+    try:
+        output = runs.run_real_pipeline(config)
+    except (ValueError, FileNotFoundError) as source_error:
+        print(str(source_error), file=sys.stderr)
+        return 1
 
+    if output.calibration_warning:
+        print(output.calibration_warning, file=sys.stderr)
+
+    result = output.result
+    zone = config.zone or runs.DEFAULT_PROTECTED_ZONE
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     alerts_path = out_dir / "alerts.csv"
@@ -437,7 +289,7 @@ def _cmd_demo_real(args: argparse.Namespace) -> int:
     result.alerts_frame().to_csv(alerts_path, index=False)
     result.events_frame().to_csv(events_path, index=False)
 
-    print(f"{args.source}: {len(result.detections)} detections across {len(frames)} frames")
+    print(f"{args.source}: {len(result.detections)} detections across {len(output.frame_ids)} frames")
     print(f"{len(result.events)} events raised")
     for e in result.events:
         print(f"  [{e.severity:6s}] {e.event_type:16s} t={e.timestamp_s:6.2f}s  {e.description}")
@@ -450,7 +302,9 @@ def _cmd_demo_real(args: argparse.Namespace) -> int:
         # A WebM/VP8 video, not a GIF: real photographic frames have far more distinct
         # colors than GIF's 256-color palette can represent faithfully -- see viz.py's
         # module docstring for the measured difference this made.
-        build_annotated_video(rgb_frames, frame_ids, result.detections, video_path, fps=args.fps, protected_zone=zone)
+        build_annotated_video(
+            output.rgb_frames, output.frame_ids, result.detections, video_path, fps=args.fps, protected_zone=zone
+        )
         print(f"Wrote {video_path}")
 
     return 0
@@ -666,7 +520,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar=("X0", "Y0", "X1", "Y1"),
         default=None,
         help="Protected-zone rectangle in the 640x352 working canvas. Defaults to an "
-        "illustrative placeholder (see REAL_DEMO_PROTECTED_ZONE) -- UAVDT/VisDrone aren't "
+        "illustrative placeholder (see runs.DEFAULT_PROTECTED_ZONE) -- UAVDT/VisDrone aren't "
         "shot around an actual perimeter, so there's no real zone to read off the data.",
     )
     demo_real_p.add_argument("--out-dir", default="outputs")
