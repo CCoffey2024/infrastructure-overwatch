@@ -178,6 +178,23 @@ def load_video_frames(
     return frame_ids, frames, rgb_frames
 
 
+def list_image_paths(folder_path) -> list[Path]:
+    """Every recognized image file directly under `folder_path`, ordered
+    naturally by filename. Shared by `load_image_folder_frames` (which
+    additionally letterboxes each one for the detector) and anything that
+    just wants the raw files -- e.g. building an anomaly-reference gallery,
+    which shouldn't be resized onto the detector's working canvas at all.
+    Raises `FileNotFoundError` if the folder has no recognized image files."""
+    folder_path = Path(folder_path)
+    paths = sorted(
+        (p for p in folder_path.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES),
+        key=lambda p: _natural_sort_key(p.name),
+    )
+    if not paths:
+        raise FileNotFoundError(f"No image files found under {folder_path}")
+    return paths
+
+
 def load_image_folder_frames(
     folder_path, stride: int = 1, cap: int = 150, work_w: int = WORK_W, work_h: int = WORK_H
 ) -> tuple[list[str], list[np.ndarray], list[np.ndarray]]:
@@ -186,14 +203,7 @@ def load_image_folder_frames(
     `cap` sampled frames), and returns the same `(frame_ids, frames,
     rgb_frames)` shape `load_video_frames` does. Raises `FileNotFoundError`
     if the folder has no recognized image files."""
-    folder_path = Path(folder_path)
-    paths = sorted(
-        (p for p in folder_path.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES),
-        key=lambda p: _natural_sort_key(p.name),
-    )
-    if not paths:
-        raise FileNotFoundError(f"No image files found under {folder_path}")
-    paths = paths[::stride][:cap]
+    paths = list_image_paths(folder_path)[::stride][:cap]
 
     frame_ids: list[str] = []
     frames: list[np.ndarray] = []

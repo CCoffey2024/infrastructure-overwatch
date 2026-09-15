@@ -148,6 +148,22 @@ def _cmd_train_real(args: argparse.Namespace) -> int:
     return 0
 
 
+def _apply_anomaly_scoring(anomaly_ref: str | None, result, rgb_frames, frame_ids, fps: float) -> None:
+    """If `--anomaly-ref` points at a reference gallery saved by
+    `fit-anomaly-reference`, scores each sufficiently mature track's crop
+    against it and folds any `VISUAL_ANOMALY` events into `result.events` in
+    place. Shared by `demo` and `demo-real` so both the synthetic and real
+    sources get the same optional pass; a no-op when `anomaly_ref` is unset.
+    """
+    if not anomaly_ref:
+        return
+    from .anomaly import EmbeddingAnomalyScorer, score_track_anomalies
+
+    scorer = EmbeddingAnomalyScorer.load(anomaly_ref)
+    anomaly_events = score_track_anomalies(rgb_frames, frame_ids, result.detections, scorer, fps=fps)
+    result.events.extend(anomaly_events)
+
+
 def _self_calibrate(
     adapter, frames, labels, img_w: int, img_h: int, grid_w: int, grid_h: int
 ) -> ConfidenceCalibrator | None:
@@ -246,6 +262,7 @@ def _cmd_demo(args: argparse.Namespace) -> int:
         calibrator=calibrator,
         triage_thresholds=DEFAULT_TRIAGE_THRESHOLDS,
     )
+    _apply_anomaly_scoring(args.anomaly_ref, result, rgb_frames, frame_ids, args.fps)
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -411,6 +428,7 @@ def _cmd_demo_real(args: argparse.Namespace) -> int:
         calibrator=calibrator,
         triage_thresholds=DEFAULT_TRIAGE_THRESHOLDS,
     )
+    _apply_anomaly_scoring(args.anomaly_ref, result, rgb_frames, frame_ids, args.fps)
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -435,6 +453,55 @@ def _cmd_demo_real(args: argparse.Namespace) -> int:
         build_annotated_video(rgb_frames, frame_ids, result.detections, video_path, fps=args.fps, protected_zone=zone)
         print(f"Wrote {video_path}")
 
+    return 0
+
+
+def _cmd_fit_anomaly_reference(args: argparse.Namespace) -> int:
+    """Builds a reference gallery of "normal" imagery for `anomaly.EmbeddingAnomalyScorer`
+    and saves it for `demo`/`demo-real --anomaly-ref` to load. Splits the gallery folder
+    in half: the first half becomes the reference gallery itself, the second half is held
+    out to calibrate the alert threshold -- scoring an image against a gallery that already
+    contains it would find itself as its own nearest neighbor (distance ~0) and silently
+    calibrate an unusably strict near-zero threshold, so the two must be disjoint.
+    """
+    import numpy as np
+    from PIL import Image
+
+    from .anomaly import DinoV2Embedder, EmbeddingAnomalyScorer, HOGEmbedder
+    from .ingest import list_image_paths
+
+    try:
+        paths = list_image_paths(args.gallery_dir)
+    except FileNotFoundError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    if len(paths) < 2:
+        print(
+            f"Only {len(paths)} image(s) under {args.gallery_dir}; need at least 2 to build a reference "
+            "gallery and hold at least one out for threshold calibration.",
+            file=sys.stderr,
+        )
+        return 1
+
+    images = [np.asarray(Image.open(p).convert("RGB")) for p in paths]
+    split = max(1, len(images) // 2)
+    gallery_images, calibration_images = images[:split], images[split:] or images[:split]
+
+    embedder = DinoV2Embedder() if args.embedder == "dinov2" else HOGEmbedder()
+    scorer = EmbeddingAnomalyScorer(embedder)
+    scorer.fit(gallery_images)
+    scorer.calibrate_threshold(calibration_images, percentile=args.percentile)
+
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    scorer.save(out_path, embedder_name=args.embedder)
+
+    print(
+        f"Fit a {args.embedder} reference gallery from {len(gallery_images)} images under "
+        f"{args.gallery_dir} ({len(calibration_images)} held out for calibration)"
+    )
+    print(f"Calibrated threshold={scorer.threshold:.3f} at the {args.percentile:.1f}th percentile")
+    print(f"Saved reference to {out_path}")
     return 0
 
 
@@ -496,6 +563,12 @@ def build_parser() -> argparse.ArgumentParser:
         "(default 1, today's behavior: every track counts immediately). Raise this (e.g. 3) "
         "for a dense real-world scene, where a single-hit track is often detector noise, not "
         "a real object -- see MultiTracker.min_hits.",
+    )
+    demo_p.add_argument(
+        "--anomaly-ref",
+        default=None,
+        help="Path to a reference gallery saved by `fit-anomaly-reference`. When set, scores "
+        "each mature track's crop against it and adds any VISUAL_ANOMALY events it raises.",
     )
     demo_p.add_argument("--seed", type=int, default=7)
     demo_p.add_argument("--out-dir", default="outputs")
@@ -581,6 +654,12 @@ def build_parser() -> argparse.ArgumentParser:
         "MultiTracker.min_hits.",
     )
     demo_real_p.add_argument(
+        "--anomaly-ref",
+        default=None,
+        help="Path to a reference gallery saved by `fit-anomaly-reference`. When set, scores "
+        "each mature track's crop against it and adds any VISUAL_ANOMALY events it raises.",
+    )
+    demo_real_p.add_argument(
         "--zone",
         type=float,
         nargs=4,
@@ -600,6 +679,28 @@ def build_parser() -> argparse.ArgumentParser:
         "hold; see viz.py).",
     )
     demo_real_p.set_defaults(func=_cmd_demo_real)
+
+    fit_anomaly_p = sub.add_parser(
+        "fit-anomaly-reference",
+        help="Build a reference gallery of 'normal' imagery for --anomaly-ref, from a folder of images.",
+    )
+    fit_anomaly_p.add_argument("--gallery-dir", required=True, help="Folder of known-normal reference images.")
+    fit_anomaly_p.add_argument(
+        "--embedder",
+        choices=["hog", "dinov2"],
+        default="hog",
+        help="hog (default): offline, no download, what CI exercises. dinov2: richer "
+        "self-supervised features, needs network access on first use.",
+    )
+    fit_anomaly_p.add_argument(
+        "--percentile",
+        type=float,
+        default=99.0,
+        help="What fraction of the held-out calibration images should score below the alert "
+        "threshold (99.0 accepts a 1%% false-alarm rate on that held-out set).",
+    )
+    fit_anomaly_p.add_argument("--out", default="outputs/weights/anomaly_reference.npz")
+    fit_anomaly_p.set_defaults(func=_cmd_fit_anomaly_reference)
 
     report_p = sub.add_parser("report", help="Build a report card + dashboard from alerts/events CSVs.")
     report_p.add_argument("--alerts", default="outputs/alerts.csv")

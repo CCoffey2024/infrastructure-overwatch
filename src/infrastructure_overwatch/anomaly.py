@@ -24,9 +24,12 @@ hard dependency on either:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from .types import Detection, Event
 
 
 class Embedder(Protocol):
@@ -147,10 +150,109 @@ class EmbeddingAnomalyScorer:
         way to pick an operating point for a one-class scorer without
         needing labeled anomalies. Read `percentile` as "what fraction of
         genuinely normal imagery should score below the alert threshold";
-        99.0 accepts a 1% false-alarm rate on the calibration set itself."""
+        99.0 accepts a 1% false-alarm rate on the calibration set itself.
+        `normal_images` must be held out from `fit`'s reference gallery --
+        scoring an image against a gallery that already contains it finds
+        itself as its own nearest neighbor (distance ~0), which would
+        silently calibrate an unusably strict near-zero threshold."""
         scores = [s.score for s in self.score(normal_images)]
         self.threshold = float(np.percentile(scores, percentile))
         return self.threshold
 
+    def save(self, path, embedder_name: str) -> None:
+        """Persists the fitted gallery, threshold, and which embedder class
+        built it, so `load(...)` can reconstruct a working scorer without
+        the caller having to remember which embedder was used."""
+        if self._gallery is None:
+            raise RuntimeError("EmbeddingAnomalyScorer.fit(...) must be called before save(...)")
+        threshold = self.threshold if self.threshold is not None else _DEFAULT_THRESHOLD
+        with open(path, "wb") as f:
+            np.savez(f, gallery=self._gallery, threshold=np.float64(threshold), embedder_name=np.str_(embedder_name))
+
+    @classmethod
+    def load(cls, path, embedder: Embedder | None = None) -> EmbeddingAnomalyScorer:
+        """Loads a reference gallery written by `save(...)`. Pass `embedder`
+        to reuse a specific already-constructed instance; omit it to
+        auto-instantiate the same embedder class (`HOGEmbedder` or
+        `DinoV2Embedder`) the gallery was fit with."""
+        with open(path, "rb") as f:
+            data = np.load(f)
+            gallery = data["gallery"]
+            threshold = float(data["threshold"])
+            embedder_name = str(data["embedder_name"])
+        if embedder is None:
+            embedder = DinoV2Embedder() if embedder_name == "dinov2" else HOGEmbedder()
+        scorer = cls(embedder, threshold=threshold)
+        scorer._gallery = gallery
+        return scorer
+
 
 _DEFAULT_THRESHOLD = 0.5
+
+
+def score_track_anomalies(
+    rgb_frames: list[np.ndarray],
+    frame_ids: list[str],
+    detections: list[Detection],
+    scorer: EmbeddingAnomalyScorer,
+    min_hits: int = 3,
+    sample_every_n_hits: int = 5,
+    fps: float = 10.0,
+) -> list[Event]:
+    """Crops each sufficiently-mature track's box out of its RGB frame,
+    scores the crop against `scorer`'s persisted reference gallery, and
+    emits a `VISUAL_ANOMALY` `Event` the first time that track's score
+    crosses the scorer's threshold -- reusing the existing `Event` type and
+    the same fire-once-per-track discipline `PipelineEventEngine` already
+    uses for its own event types, so this is a routing hint for a human
+    analyst like every other event, not a new kind of decision.
+
+    `min_hits` skips a track's crops until it's been seen at least this many
+    times (the same idea as `MultiTracker.min_hits`, applied independently
+    here since a caller may want a different bar for "worth embedding" than
+    for "worth raising a zone event"). `sample_every_n_hits` then scores
+    only every Nth hit of an already-mature track -- an appearance embedding
+    changes slowly frame to frame, so embedding every single one is wasted
+    compute for a signal this stable.
+    """
+    from .types import Event
+
+    frame_index = {fid: i for i, fid in enumerate(frame_ids)}
+    hit_count: dict[int, int] = {}
+    already_flagged: set[int] = set()
+    events: list[Event] = []
+
+    for det in detections:
+        if det.track_id is None or det.track_id in already_flagged:
+            continue
+        hit_count[det.track_id] = hit_count.get(det.track_id, 0) + 1
+        hits = hit_count[det.track_id]
+        if hits < min_hits or (hits - min_hits) % sample_every_n_hits != 0:
+            continue
+
+        frame = rgb_frames[frame_index[det.frame_id]]
+        x1, y1, x2, y2 = (int(round(v)) for v in det.xyxy)
+        x1, y1 = max(0, x1), max(0, y1)
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            continue
+
+        [result] = scorer.score([crop])
+        if result.is_anomalous:
+            threshold = scorer.threshold if scorer.threshold is not None else _DEFAULT_THRESHOLD
+            events.append(
+                Event(
+                    frame_id=det.frame_id,
+                    timestamp_s=frame_index[det.frame_id] / fps,
+                    event_type="VISUAL_ANOMALY",
+                    severity="medium",
+                    track_id=det.track_id,
+                    description=(
+                        f"Track {det.track_id} ({det.label}) looks unlike anything in the reference "
+                        f"gallery (distance {result.score:.2f} >= threshold {threshold:.2f})."
+                    ),
+                    score=result.score,
+                )
+            )
+            already_flagged.add(det.track_id)
+    return events
