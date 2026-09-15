@@ -68,8 +68,13 @@ uv pip install -e ".[dataviz]"
 python -m infrastructure_overwatch report
 ```
 
-Optional real-vehicle-data path (`vehicle_of_interest`, UAVDT-backed) requires a local copy
-of the UAVDT benchmark — see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+There is a second, parallel `train-real` / `demo-real` pair of commands that run the same
+pipeline against real UAVDT/VisDrone footage instead of the synthetic renderer, for the
+`vehicle_of_interest` (and, with `--class-scheme vehicle_dismount`, `dismount`) track —
+requires a local copy of one or both datasets, see
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). `demo-real` writes a WebM video rather than a
+GIF (real footage has far more colors than a GIF palette can hold faithfully — see
+`viz.py`); pass `report --video outputs/annotated_demo.webm` to embed it.
 
 ## Documentation
 

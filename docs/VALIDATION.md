@@ -5,11 +5,11 @@ what it measured — not a claim that everything has been exercised everywhere.
 
 ## Automated checks (CI, and reproducible anywhere)
 
-`ruff check .`, `ruff format --check .`, `mypy src`, and `pytest -v` (92 tests covering
+`ruff check .`, `ruff format --check .`, `mypy src`, and `pytest -v` (97 tests covering
 geometry, grid encode/decode, calibration, tracking, event logic, evaluation, synthetic
 rendering, HOG-based anomaly scoring, reporting, VisDrone-DET/VisDrone-VID
-ingest/class-mapping on on-disk fixtures, and detection-drawing/GIF rendering) all pass
-with no GPU. CI installs the `dev`, `onnx`, `anomaly`, and `dataviz` extras (all
+ingest/class-mapping on on-disk fixtures, and detection-drawing/GIF/video rendering) all
+pass with no GPU. CI installs the `dev`, `onnx`, `anomaly`, and `dataviz` extras (all
 lightweight, no model downloads); the `yolo` and `nlp` extras are not installed in CI since
 they pull in either a GPU-oriented package or real pretrained weights. These run in CI
 (`.github/workflows/ci.yml`) on every push/PR.
@@ -31,6 +31,28 @@ visibly destroyed a detection box that was only drawn on a single frame — real
 `(160, 160, 160)` gray came back near-black. Switching to an animated GIF (no inter-frame
 prediction to lose a one-frame box to) fixed it; `tests/test_viz.py` now has a regression
 test for exactly this case.
+
+`python -m infrastructure_overwatch train-real --epochs 2 --no-visdrone` and
+`demo-real --source "uavdt:M0601" --calibrate` were run against a real local UAVDT copy
+(`D:\FMV\UAVDT\raw`) and completed without error — but not on the first try, and the same
+"read the pixels back, don't just check the file exists" discipline that validated the GIF
+panel caught two more real bugs before they shipped:
+
+- `cli._self_calibrate` was called with `VEHICLE_GRID_W`/`VEHICLE_GRID_H` swapped for the
+  real-data path (an easy mistake: the synthetic path's grid is square, `GRID`/`GRID`, so
+  the same bug there would have been invisible). Crashed immediately with an `IndexError`
+  the first time it ran against real (non-square, 40x22) grid data — a case CI's synthetic
+  tests can't reach, since they never exercise a non-square grid.
+- The GIF panel's own fix doesn't transfer to real footage: a real UAVDT frame with boxes
+  drawn on it measured out to **105,825 distinct colors in a single 640x352 frame**, nowhere
+  close to a GIF's 256-color palette. A detection box's exact `(76, 175, 80)` green came
+  back a muddy, indistinguishable `(111, 129, 112)` after a GIF round-trip on real footage
+  — the *opposite* failure mode from the one that ruled video out for the synthetic path.
+  `viz.py` now has two functions, `build_annotated_gif` (synthetic) and
+  `build_annotated_video` (WebM/VP8, real footage) — measured to preserve that same green
+  to `(74, 174, 79)`, since real detections are also denser (tracked objects usually span
+  many consecutive frames), so VP8's sparse-content failure mode doesn't apply here. Both
+  bugs have regression tests in `tests/test_viz.py`.
 
 ## Evidence notebooks
 
