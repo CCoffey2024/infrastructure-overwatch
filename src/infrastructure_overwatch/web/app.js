@@ -107,6 +107,36 @@ function renderJobQueue() {
 
 // --- Ingest form --------------------------------------------------------
 
+const PATH_FIELD_BY_KIND = {
+  video: {
+    label: "Video file path",
+    placeholder: "C:\\clips\\corridor.mp4",
+    hint: "Read in place, not uploaded/copied -- point at a local video file.",
+  },
+  folder: {
+    label: "Image folder path",
+    placeholder: "C:\\clips\\frames",
+    hint: "Read in place, not uploaded/copied -- point at a local folder of image frames.",
+  },
+  uavdt: {
+    label: "UAVDT sequence name",
+    placeholder: "M0601",
+    hint: "A sequence name from your local UAVDT copy (UAVDT_ROOT), not a file path.",
+  },
+  "visdrone-vid": {
+    label: "VisDrone2019-VID sequence name",
+    placeholder: "uav0000086_00000_v",
+    hint: "A sequence name from your local VisDrone copy (VISDRONE_ROOT), not a file path.",
+  },
+};
+
+function updatePathFieldForKind(kind) {
+  const spec = PATH_FIELD_BY_KIND[kind] || PATH_FIELD_BY_KIND.video;
+  document.getElementById("path-label-text").textContent = spec.label;
+  document.getElementById("path-input").placeholder = spec.placeholder;
+  document.getElementById("path-hint").textContent = spec.hint;
+}
+
 function initIngestForm() {
   const form = document.getElementById("ingest-form");
   const kindSelect = document.getElementById("source-kind");
@@ -114,7 +144,9 @@ function initIngestForm() {
 
   kindSelect.addEventListener("change", () => {
     splitRow.classList.toggle("hidden", kindSelect.value !== "visdrone-vid");
+    updatePathFieldForKind(kindSelect.value);
   });
+  updatePathFieldForKind(kindSelect.value); // set correct label/placeholder on first load, not just on change
 
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
